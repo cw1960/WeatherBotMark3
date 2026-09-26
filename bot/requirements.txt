@@ -1,0 +1,9 @@
+polymarket-client>=1.0
+supabase>=2.5
+httpx>=0.27
+websockets>=12
+python-dotenv>=1.0
+pydantic>=2.7
+python-metar>=1.11
+structlog>=24.1
+tenacity>=8.3
