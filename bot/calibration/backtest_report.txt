@@ -1,45 +1,159 @@
-WeatherBotMark3 backtest — 2026-09-26 17:08 UTC
+WeatherBotMark3 backtest — 2026-09-26 17:35 UTC
 Period 2026-07-27 → 2026-09-24; decision time = local midnight; forecasts = 24 h lead.
 Walk-forward: each day scored with settings learned only from earlier days (needs ≥ 14 earlier days).
 
 LOWER log loss = better. Guessing evenly across ~11 buckets scores about 2.40.
 
-Generic settings (today's bot)     days=  92  log loss=1.609  Brier=0.756
-Station-calibrated                 days=  92  log loss=1.285  Brier=0.662
-Polymarket price                   days=  92  log loss=1.181  Brier=0.638
+Generic settings (today's bot)     days=2190  log loss=1.798  Brier=0.803
+Station-calibrated                 days=2190  log loss=1.438  Brier=0.700
+Polymarket price                   days=1437  log loss=1.241  Brier=0.634
+Blend: 25% ours + market           days=1437  log loss=1.244  Brier=0.636
+Blend: 50% ours + market           days=1437  log loss=1.275  Brier=0.647
+
+Edge test (market scored on 1437 city-days): NO — adding our probabilities does not improve on the market's price; no evidence of edge at this decision time.
 
 Reliability — station-calibrated (want 'happened' ≈ 'we said'):
          we said   happened   count
-            0–5%       0.2%     655   (avg said 0.4%)
-           5–15%       7.3%     110   (avg said 9.9%)
-          15–30%      23.5%     119   (avg said 22.5%)
-          30–50%      40.4%     109   (avg said 37.9%)
-          50–70%      57.9%      19   (avg said 56.2%)
+            0–5%       0.6%   14565   (avg said 0.6%)
+           5–15%       7.2%    3460   (avg said 9.6%)
+          15–30%      23.1%    3672   (avg said 22.2%)
+          30–50%      40.0%    2076   (avg said 37.4%)
+          50–70%      50.7%     292   (avg said 56.8%)
+          70–90%      75.0%      24   (avg said 75.2%)
+         90–100%     100.0%       1   (avg said 95.2%)
 
 Reliability — generic settings:
          we said   happened   count
-            0–5%       0.0%     441   (avg said 1.5%)
-           5–15%       2.8%     286   (avg said 9.7%)
-          15–30%      29.2%     284   (avg said 20.2%)
-          30–50%     100.0%       1   (avg said 37.1%)
+            0–5%       0.3%    9633   (avg said 1.7%)
+           5–15%       6.8%    8065   (avg said 9.9%)
+          15–30%      25.1%    6335   (avg said 19.1%)
+          30–50%      20.0%      45   (avg said 37.8%)
+          50–70%      54.5%      11   (avg said 56.0%)
+          70–90%     100.0%       1   (avg said 78.2%)
 
 Reliability — Polymarket prices:
          we said   happened   count
-            0–5%       0.4%     685   (avg said 0.7%)
-           5–15%       7.5%     107   (avg said 8.9%)
-          15–30%      22.4%      85   (avg said 22.4%)
-          30–50%      43.1%     102   (avg said 39.6%)
-          50–70%      54.5%      33   (avg said 55.0%)
+            0–5%       0.5%   10577   (avg said 0.8%)
+           5–15%       7.9%    1736   (avg said 9.2%)
+          15–30%      22.9%    1621   (avg said 22.3%)
+          30–50%      41.1%    1340   (avg said 38.9%)
+          50–70%      60.2%     515   (avg said 57.2%)
+          70–90%      72.2%      18   (avg said 73.4%)
 
-Paper trades (edge ≥ 8% at the market price, $10 each):
-    trades=69  won=13  P&L=$+289.94  ROI=+42.0%
-    (Optimistic: uses traded prices, not the ask you'd actually pay.)
+Paper trades — live bot rules (edge 8%–30%, P ≥ 10%, 1 per city-day, $10 each):
+    trades=1012  won=141  P&L=$+960.03  ROI=+9.5%   90% range -11% … +32%
+      long shots  <10¢  trades= 511  won= 32  P&L=$ +919.35  ROI=+18%
+      10–30¢            trades= 411  won= 75  P&L=$ +107.55  ROI=+3%
+      30–60¢            trades=  85  won= 31  P&L=$  -63.13  ROI=-7%
+      favourites >60¢   trades=   5  won=  3  P&L=$   -3.74  ROI=-7%
 
-City            days   generic  calibrated
-London            46     1.640       1.255
-New York City     46     1.578       1.316
+Paper trades — blend rules (50/50 blend must beat the price by ≥ 4%):
+    trades=842  won=162  P&L=$+712.01  ROI=+8.5%   90% range -7% … +26%
+      long shots  <10¢  trades= 224  won= 21  P&L=$ +845.52  ROI=+38%
+      10–30¢            trades= 492  won= 88  P&L=$ -234.31  ROI=-5%
+      30–60¢            trades= 120  won= 49  P&L=$  +98.02  ROI=+8%
+      favourites >60¢   trades=   6  won=  4  P&L=$   +2.79  ROI=+5%
+    Caveats: uses the last TRADED price (the ask you'd pay is higher, especially for cheap
+    buckets at midnight); a few long-shot wins can swing the total — see the 90% range.
+
+City            days   generic  calibrated   | ours   market    blend
+Tel Aviv          46     1.548       0.754    0.746    0.728    0.684
+Jeddah            41     1.950       1.258    1.191    1.222    1.163
+Singapore         46     1.820       1.151    1.203    1.000    1.064
+Istanbul          46     1.802       1.173    1.166    0.941    0.988
+Shanghai          46     1.801       1.199    1.110    1.098    1.064
+Kuala Lumpur      46     1.985       1.395    1.395    1.092    1.175
+Amsterdam         46     1.679       1.095    1.078    0.968    0.979
+Ankara            46     1.738       1.198    1.260    0.985    1.054
+Taipei            45     2.166       1.641    1.494    1.475    1.445
+Munich            46     1.983       1.476    1.215    0.960    1.023
+Busan             46     1.875       1.382    1.248    1.187    1.188
+Helsinki          46     1.583       1.093    1.058    0.975    0.955
+Warsaw            46     1.626       1.167    1.110    1.040    1.028
+Austin            46     1.747       1.314    1.468    1.197    1.256
+Lucknow           45     1.781       1.350    1.297    1.164    1.157
+Madrid            46     1.666       1.236    1.094    0.906    0.960
+Wellington        46     1.728       1.302    1.190    0.960    1.000
+Karachi           46     1.738       1.314    1.453    1.390    1.381
+Guangzhou         46     2.217       1.799    1.861    1.618    1.677
+Mexico City       46     1.647       1.237    1.153    1.017    1.049
+Seoul             46     1.868       1.471    1.465    1.123    1.239
+London            46     1.640       1.255    1.254    1.188    1.195
+Paris             46     1.775       1.392    1.397    1.218    1.265
+Houston           46     1.744       1.363    1.511    1.364    1.317
+Toronto           46     1.763       1.402    1.408    1.222    1.278
+Milan             46     1.758       1.408    1.351    0.979    1.072
+Atlanta           46     1.625       1.280    1.203    1.125    1.124
+Buenos Aires      46     1.741       1.398    1.392    1.146    1.218
+Dallas            46     1.647       1.326    1.301    1.109    1.122
+Manila            45     1.902       1.597    1.573    1.507    1.503
+Los Angeles       46     1.835       1.530    1.599    1.228    1.291
+Miami             46     1.724       1.448    1.696    1.217    1.367
+New York City     46     1.578       1.316    1.503    1.212    1.309
+Qingdao           44     1.753       1.496    1.393    1.226    1.275
+Chongqing         45     1.938       1.690    1.692    1.371    1.449
+Beijing           46     1.760       1.528    1.487    1.375    1.376
+Chicago           46     1.721       1.500    1.568    1.485    1.442
+Moscow            45     1.616       1.432    1.465    1.415    1.399
+Wuhan             46     1.844       1.671    1.716    1.514    1.556
+San Francisco     44     1.878       1.706    1.638    1.379    1.459
+Denver            46     1.794       1.637    1.591    1.410    1.456
+Shenzhen          46     1.793       1.643    1.629    1.594    1.574
+Panama City       46     2.334       2.186    1.794    1.517    1.612
+Cape Town         45     1.787       1.646    1.698    1.526    1.552
+Chengdu           43     2.024       1.897    1.956    1.763    1.788
+Seattle           46     1.674       1.574    1.534    1.385    1.405
+São Paulo         46     1.898       1.892    2.014    1.582    1.730
+Tokyo             46     1.851       1.860    1.687    1.470    1.544
+    (ours / market / blend are scored on the same days that had prices)
 
 Learned station settings (all days):
 ICAO   days   sigma  model offset (weight %) — station − model
+CYYZ     60    0.60  icon:+0.4(22), ukmo:-0.3(20), gem:-0.9(18), ecmwf_ifs025:+0.0(14), jma:+2.7(13), gfs:-0.1(13)
+EDDM     60    0.60  ukmo:+1.3(26), gfs:+1.0(20), ecmwf_ifs025:+1.4(16), icon:+0.7(14), gem:+0.9(14), jma:+3.0(9)
+EFHK     60    0.45  ukmo:+0.5(23), icon:+0.6(22), gem:+0.6(16), ecmwf_ifs025:+0.7(14), gfs:+0.1(13), jma:+0.2(12)
 EGLC     59    0.60  icon:+0.3(22), ukmo:+0.2(20), gem:+0.2(17), ecmwf_ifs025:+0.5(15), jma:+1.3(13), gfs:-0.3(12)
+EHAM     60    0.39  icon:+0.3(26), ukmo:+0.2(20), ecmwf_ifs025:+1.0(20), gem:+0.3(16), gfs:+0.0(9), jma:+1.6(9)
+EPWA     58    0.55  icon:+0.0(23), ukmo:-0.1(21), gfs:-1.0(17), ecmwf_ifs025:+0.6(16), gem:-0.7(12), jma:+1.3(11)
+FACT     57    0.70  icon:+0.3(22), gem:-0.4(19), ukmo:+0.3(17), ecmwf_ifs025:+0.5(16), gfs:-0.1(15), jma:+2.0(11)
+KATL     60    1.07  ukmo:+0.8(20), ecmwf_ifs025:+0.3(18), gfs_hrrr:-1.1(14), gfs:-1.1(14), icon:+0.8(13), gem:+1.8(12), jma:+3.0(9)
+KAUS     60    1.34  gem:+1.5(18), ukmo:+0.9(17), gfs_hrrr:+2.1(16), gfs:+2.1(16), ecmwf_ifs025:+0.8(15), icon:+0.1(12), jma:+3.8(5)
+KBKF     60    1.69  gfs_hrrr:+0.1(19), gfs:+0.1(19), gem:+2.1(13), icon:+2.1(13), ukmo:+0.7(13), ecmwf_ifs025:+1.5(12), jma:+3.3(11)
+KDAL     59    0.99  gem:+0.6(28), ukmo:-0.7(15), gfs_hrrr:+1.8(14), gfs:+1.8(14), ecmwf_ifs025:-1.3(12), icon:-0.7(12), jma:-0.1(6)
+KHOU     60    0.52  icon:-1.0(20), ukmo:-1.5(16), gem:-0.7(16), gfs_hrrr:-2.6(14), gfs:-2.6(14), jma:+2.9(10), ecmwf_ifs025:+0.2(10)
+KLAX     58    1.70  icon:-3.5(20), ukmo:-0.1(17), gfs_hrrr:+0.3(15), gfs:+0.3(15), gem:-4.1(14), jma:-0.7(13), ecmwf_ifs025:-8.9(6)
 KLGA     60    0.89  ukmo:-1.0(21), gem:-0.4(18), ecmwf_ifs025:+0.2(14), icon:-0.3(13), jma:+0.9(12), gfs_hrrr:-0.7(11), gfs:-0.7(11)
+KMIA     60    1.17  icon:+0.2(20), ecmwf_ifs025:+2.8(15), ukmo:+0.3(15), jma:+2.0(13), gfs_hrrr:+1.5(13), gfs:+1.5(13), gem:+0.4(10)
+KORD     60    1.43  gem:-2.8(19), icon:-0.1(18), ecmwf_ifs025:+0.7(15), jma:+0.7(14), gfs_hrrr:-1.0(12), gfs:-1.0(12), ukmo:-0.2(11)
+KSEA     59    1.43  icon:+1.8(17), gem:-1.4(15), gfs_hrrr:-0.6(15), gfs:-0.6(15), ukmo:-0.8(14), ecmwf_ifs025:+0.9(13), jma:+1.3(12)
+KSFO     58    1.70  gem:+1.8(20), ecmwf_ifs025:-2.8(19), icon:-0.8(14), ukmo:-0.8(14), jma:+5.4(12), gfs_hrrr:+0.2(10), gfs:+0.2(10)
+LEMD     59    0.39  ecmwf_ifs025:+0.4(25), icon:+0.7(21), gfs:+0.6(17), gem:+1.2(14), ukmo:+0.7(13), jma:+0.7(11)
+LFPB     59    0.50  ecmwf_ifs025:+0.9(24), icon:+0.4(20), ukmo:+0.4(16), gem:+0.6(16), gfs:-0.9(12), jma:+1.7(12)
+LIMC     59    0.60  icon:-0.2(27), ukmo:+0.0(23), ecmwf_ifs025:+1.1(20), gem:+0.5(13), jma:+1.5(11), gfs:+0.0(8)
+LLBG     60    0.29  icon:+0.1(23), gem:+0.1(21), gfs:-0.1(17), ukmo:-0.7(15), jma:-0.3(13), ecmwf_ifs025:-1.4(11)
+LTAC     60    0.45  gem:+0.6(23), icon:+1.0(17), jma:+1.1(17), gfs:+0.6(15), ukmo:+1.2(14), ecmwf_ifs025:+0.5(14)
+LTFM     60    0.50  gem:+0.0(24), icon:+0.1(24), ecmwf_ifs025:+0.3(21), gfs:-1.4(13), jma:+2.0(11), ukmo:+2.2(7)
+MMMX     56    0.50  icon:-0.3(24), ukmo:+0.0(23), jma:+1.4(20), gem:+1.0(12), gfs:-0.2(11), ecmwf_ifs025:-0.3(10)
+MPMG     56    0.90  icon:+0.0(22), jma:+2.1(20), gfs:+1.3(16), ecmwf_ifs025:+1.8(16), gem:+0.6(15), ukmo:+1.1(11)
+NZWN     60    0.70  gfs:+1.0(23), ecmwf_ifs025:+0.9(21), icon:+0.5(20), ukmo:+0.5(13), gem:+0.6(12), jma:+0.9(11)
+OEJN     52    0.60  icon:-0.4(24), gfs:+0.2(22), ecmwf_ifs025:-1.9(20), gem:+1.3(16), jma:+4.8(9), ukmo:-2.0(8)
+OPKC     58    0.65  icon:-0.3(28), ukmo:-1.2(16), ecmwf_ifs025:-0.7(16), gem:+0.3(14), gfs:+1.1(14), jma:+1.6(13)
+RCSS     59    0.80  gem:+2.1(20), ukmo:+1.4(19), gfs:+0.9(19), icon:+1.1(17), ecmwf_ifs025:+1.4(14), jma:+2.7(12)
+RJTT     60    0.94  gfs:-0.0(20), icon:+0.6(20), ukmo:-0.7(16), jma:+0.9(16), gem:+0.4(15), ecmwf_ifs025:-0.2(12)
+RKPK     60    0.65  jma:+1.7(22), gem:+0.6(17), ukmo:+0.9(17), gfs:+0.3(16), icon:+1.8(14), ecmwf_ifs025:+0.9(13)
+RKSI     60    0.89  ecmwf_ifs025:+0.5(24), icon:-0.0(23), gem:+0.4(20), jma:+2.0(12), gfs:+2.6(11), ukmo:+1.9(10)
+RPLL     59    0.94  ecmwf_ifs025:+1.9(20), gem:+1.8(17), ukmo:-0.3(16), icon:+0.3(16), gfs:+0.7(16), jma:+0.6(15)
+SAEZ     59    0.70  ecmwf_ifs025:+0.7(23), icon:+0.9(22), ukmo:+0.9(17), gfs:+0.7(16), gem:+0.1(11), jma:+0.9(10)
+SBGR     58    1.09  ecmwf_ifs025:+0.2(21), icon:+0.4(19), gfs:-0.6(16), jma:+1.1(16), ukmo:+1.1(15), gem:-0.3(13)
+UUWW     58    0.70  icon:+0.3(23), jma:-0.2(18), gem:-0.2(17), ukmo:+0.4(15), ecmwf_ifs025:+0.4(15), gfs:-0.1(11)
+VILK     58    0.45  ecmwf_ifs025:+0.8(23), ukmo:+0.1(20), jma:+0.8(18), icon:+0.7(17), gfs:-1.7(13), gem:+1.0(10)
+WMKK     60    0.75  ecmwf_ifs025:+1.1(21), jma:+3.6(20), icon:+0.3(19), ukmo:+0.6(16), gfs:+1.7(14), gem:+1.8(10)
+WSSS     60    0.45  ecmwf_ifs025:+1.1(18), jma:+2.7(17), gfs:+1.1(17), icon:+0.2(17), gem:+1.0(15), ukmo:+0.3(15)
+ZBAA     60    0.70  ukmo:+0.3(23), ecmwf_ifs025:+0.7(20), icon:+1.1(18), jma:+0.0(15), gfs:-0.6(13), gem:+0.0(12)
+ZGGG     59    0.84  icon:+1.5(21), gem:+1.7(18), ukmo:+1.4(17), ecmwf_ifs025:+1.4(17), jma:+2.6(16), gfs:+1.3(11)
+ZGSZ     60    1.08  jma:+1.0(21), ecmwf_ifs025:+0.8(20), icon:+0.5(18), ukmo:-0.3(17), gfs:-1.3(13), gem:+0.6(12)
+ZHHH     58    0.75  icon:+0.6(24), gfs:+1.0(21), ukmo:+0.0(19), ecmwf_ifs025:+1.0(14), gem:+0.4(13), jma:+0.2(8)
+ZSPD     60    0.60  ecmwf_ifs025:+0.6(23), ukmo:+0.8(20), gfs:+1.5(18), icon:+1.1(16), gem:+1.2(15), jma:+1.7(8)
+ZSQD     58    0.65  icon:+0.3(21), ecmwf_ifs025:+0.1(19), gem:-0.3(17), ukmo:-0.8(16), gfs:-1.1(14), jma:+1.2(13)
+ZUCK     55    0.94  icon:+0.8(23), gfs:+1.5(18), gem:+0.4(17), ecmwf_ifs025:+1.2(16), ukmo:+1.7(16), jma:+1.5(10)
+ZUUU     55    0.99  icon:+0.4(22), ukmo:+0.0(19), jma:+1.2(17), ecmwf_ifs025:+1.4(15), gfs:+1.3(14), gem:+1.3(13)

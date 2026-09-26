@@ -6,6 +6,7 @@ bot/
 ├── discover_markets.py         # report: every city's markets today/tomorrow + live METAR bucket
 ├── edge_report.py              # report: every model per city, bucket probabilities vs prices
 ├── backtest.py                 # replay past settled markets → score + learn per-station calibration
+├── peak_times.py               # when does each city's daily high happen? → calibration/peak_times.json
 ├── calibration/                # station_calibration.json (used by the bot) + backtest_report.txt
 ├── requirements.txt            # polymarket-client pinned to 0.11.x
 ├── requirements-dev.txt        # + pytest
