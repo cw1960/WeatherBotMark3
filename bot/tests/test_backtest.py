@@ -149,3 +149,52 @@ async def test_forecast_history_falls_back_to_past_days(tmp_path, monkeypatch):
         out = await bt.fetch_model_history(http, asyncio.Semaphore(1), st, "ecmwf_ifs025",
                                            date(2026, 8, 1), date(2026, 9, 1))
     assert out == ([1, 2], [20.0, 21.0]) and "past_days" in seen[-1]
+
+
+def _world(n, noise, seed=3, good_err=0.3, bad_err=2.5):
+    """Station truth = forecast + 1.0 + N(0, noise). Model 'good' tracks it closely,
+    model 'bad' carries large random errors."""
+    rng = random.Random(seed)
+    recs = []
+    for i in range(n):
+        base = 20 + 5 * rng.random()                      # what the atmosphere "planned"
+        t = round(base + 1.0 + rng.gauss(0, noise))       # station reality, unpredictable part = noise
+        recs.append(DayRecord(date(2026, 6, 1) + timedelta(days=i),
+                              {"good": base + rng.gauss(0, good_err),
+                               "bad": base + 1.0 + rng.gauss(0, bad_err)}, t, t, t))
+    return recs
+
+
+def test_skilled_model_gets_more_weight():
+    cal = fit_station(_world(60, 0.3), "C")
+    assert cal.weights["good"] > 0.7 > cal.weights["bad"]
+    assert abs(sum(cal.weights.values()) - 1) < 1e-6
+
+
+def test_sigma_tracks_real_uncertainty():
+    tight = fit_station(_world(80, 0.2, good_err=0.1), "C")
+    loose = fit_station(_world(80, 1.8, good_err=0.1), "C")
+    assert tight.sigma < 0.9 < 1.4 < loose.sigma
+
+
+def test_walk_forward_probabilities_are_honest():
+    """Simulated world with a known answer: the bot's stated probabilities must come true at
+    about the stated rate (this is exactly the flaw the first real backtest exposed)."""
+    rng = random.Random(11)
+    recs = []
+    for i in range(260):
+        f = 20 + 6 * rng.random()
+        truth = round(f + 0.8 + rng.gauss(0, 0.9))
+        recs.append(DayRecord(date(2026, 1, 1) + timedelta(days=i),
+                              {"a": f + rng.gauss(0, 0.2), "b": f - 0.5 + rng.gauss(0, 0.4)}, truth, truth, truth))
+    buckets = [bt.Bucket("x", date.min, "e", "s", str(k), str(k), f"{k}°C", k, k, "C", "y", "n", True, True, False)
+               for k in range(10, 40)]
+    sc = bt.Score("t")
+    for i in range(40, len(recs)):
+        cal = fit_station(recs[:i], "C")
+        sc.add(bt.predict(recs[i], cal, "C", buckets), f"{recs[i].truth}°C")
+    for lo, hi in [(0.15, 0.3), (0.3, 0.5)]:
+        sel = [(p, o) for p, o in sc.pairs if lo <= p < hi]
+        said = sum(p for p, _ in sel) / len(sel)
+        happened = sum(o for _, o in sel) / len(sel)
+        assert abs(said - happened) < 0.08, (lo, hi, said, happened)

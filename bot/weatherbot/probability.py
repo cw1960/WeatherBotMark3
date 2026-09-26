@@ -48,9 +48,9 @@ def sigma(hours_remaining: int, unit: str, sigma_full: float | None = None) -> f
     """Uncertainty of further heating. `sigma_full` (station unit) is the learned full-day value
     for this station (calibration.py); without it the generic default is used."""
     frac = min(max(hours_remaining, 0), 12) / 12
-    floor_ = SIGMA_FLOOR_C * _unit_scale(unit)
     full = sigma_full if sigma_full is not None else (SIGMA_FLOOR_C + SIGMA_RANGE_C) * _unit_scale(unit)
-    return floor_ + (max(full, floor_) - floor_) * frac
+    floor_ = min(SIGMA_FLOOR_C * _unit_scale(unit), 0.6 * full)
+    return floor_ + (full - floor_) * frac
 
 
 def _rounded(v: float) -> int:
@@ -72,17 +72,22 @@ def model_mean(
 def distribution(
     *, observed_high: float | None, means: Iterable[float], hours_remaining: int, unit: str,
     p_peak_passed: float = 0.0, sigma_full: float | None = None,
+    weights: Iterable[float] | None = None,
 ) -> dict[int, float]:
     """Probability of each whole-degree settlement value.
 
     final = max(F, X), independent:
       F = observed high + |N(0, OBS_GAP)|   — the true peak so far may sit a little above what
                                              the reports we saw captured (never below it)
-      X = further heating: equal-weight mixture of N(mean_m, sigma); with probability
+      X = further heating: weighted mixture of N(mean_m, sigma) (weights = each model's
+          track record at this station; equal if uncalibrated); with probability
           p_peak_passed (or when no hours remain) there is no further heating.
     CDF_final(x) = CDF_F(x) · CDF_X(x), and P(k) = CDF(k+0.5) − CDF(k−0.5).
     """
     means = list(means)
+    w = list(weights) if weights is not None else [1.0] * len(means)
+    wsum = sum(w) or 1.0
+    w = [x / wsum for x in w]
     gap = OBS_GAP_SIGMA_C * _unit_scale(unit)
     s = sigma(hours_remaining, unit, sigma_full)
     heating = bool(means) and hours_remaining > 0
@@ -98,7 +103,7 @@ def distribution(
     def cdf_x(x: float) -> float:
         if not heating:
             return 1.0
-        mix = sum(_phi((x - mu) / s) for mu in means) / len(means)
+        mix = sum(wi * _phi((x - mu) / s) for wi, mu in zip(w, means))
         return p_none + (1.0 - p_none) * mix
 
     if observed_high is None and not heating:
@@ -133,6 +138,7 @@ def forecast_distribution(
     mixture → settlement value distribution. `forecast` is a weather.forecast.StationForecast;
     `cal` is an optional calibration.StationCal learned by backtest.py."""
     station_bias = cal.bias if cal is not None else {}
+    station_w = (cal.weights or {}) if cal is not None else {}
     sigma_full = cal.sigma if cal is not None else None
     shift_probs = jev_shift_probs or {"as_forecast": 1.0}
     models = list(forecast.models.values())
@@ -142,7 +148,8 @@ def forecast_distribution(
         if p_cat <= 0:
             continue
         steps = JEV_SHIFT_STEPS.get(cat, 0)
-        means = []
+        means, weights = [], []
+        default_w = (sum(station_w.values()) / len(station_w)) if station_w else 1.0
         for m in models:
             b = station_bias.get(m.model, 0.0)
             mu = model_mean(
@@ -152,9 +159,11 @@ def forecast_distribution(
                 unit=unit, shift_steps=steps)
             if mu is not None:
                 means.append(mu)
+                weights.append(station_w.get(m.model, default_w))
         for k, p in distribution(observed_high=observed_high, means=means,
                                  hours_remaining=hours_remaining, unit=unit,
-                                 p_peak_passed=p_peak_passed, sigma_full=sigma_full).items():
+                                 p_peak_passed=p_peak_passed, sigma_full=sigma_full,
+                                 weights=weights).items():
             combined[k] = combined.get(k, 0.0) + p_cat * p
     total = sum(combined.values())
     return {k: v / total for k, v in combined.items()} if total else combined

@@ -211,9 +211,12 @@ async def price_at(http, sem, token: str, ts: int) -> float | None:
 def predict(rec: DayRecord, cal: StationCal | None, unit: str, buckets: list[Bucket]) -> dict[str, float]:
     """Bot's probabilities at local midnight: no observations yet, a full day of heating ahead."""
     bias = cal.bias if cal else {}
-    means = [v + bias.get(m, 0.0) for m, v in rec.model_max.items()]
+    wts = (cal.weights or {}) if cal else {}
+    names = list(rec.model_max)
+    means = [rec.model_max[m] + bias.get(m, 0.0) for m in names]
+    weights = [wts.get(m, 1.0 / max(len(names), 1)) for m in names] if wts else None
     dist = distribution(observed_high=None, means=means, hours_remaining=24, unit=unit,
-                        sigma_full=cal.sigma if cal else None)
+                        sigma_full=cal.sigma if cal else None, weights=weights)
     return bucket_probabilities(dist, buckets)
 
 
@@ -284,7 +287,10 @@ async def main() -> int:
                 if not mm:
                     continue
                 wb = next(b for b in buckets if b.label == winner)
-                records[st.city_slug].append((DayRecord(d, mm, truth_value(wb)), buckets, winner))
+                bounded = wb.lower is not None and wb.upper is not None
+                records[st.city_slug].append((DayRecord(d, mm, truth_value(wb),
+                                                        wb.lower if bounded else None,
+                                                        wb.upper if bounded else None), buckets, winner))
             print(f"  [{i:>2}/{len(stations)}] {st.city_label:<14} settled days={len(have):>3}  "
                   f"models with history={len(maxima)}  usable days={len(records[st.city_slug])}")
 
@@ -350,9 +356,10 @@ async def main() -> int:
     for name, n, g, c in sorted(per_city, key=lambda x: x[3] - x[2]):
         lines.append(f"{name:<14}{n:>6}{g:>10.3f}{c:>12.3f}")
     lines += ["", "Learned station settings (all days):",
-              f"{'ICAO':<6}{'days':>5}{'sigma':>8}  model offsets (station − model)"]
+              f"{'ICAO':<6}{'days':>5}{'sigma':>8}  model offset (weight %) — station − model"]
     for icao, c in sorted(final.items()):
-        offs = ", ".join(f"{m.replace('_seamless','')}:{b:+.1f}" for m, b in sorted(c.bias.items()))
+        offs = ", ".join(f"{m.replace('_seamless','')}:{b:+.1f}({c.weights.get(m, 0)*100:.0f})"
+                         for m, b in sorted(c.bias.items(), key=lambda kv: -c.weights.get(kv[0], 0)))
         lines.append(f"{icao:<6}{c.n_days:>5}{c.sigma:>8.2f}  {offs}")
 
     report = "\n".join(lines)
