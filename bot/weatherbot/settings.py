@@ -39,6 +39,9 @@ class Settings:
     jev_api_key: str = field(default_factory=lambda: _env("JEV_API_KEY"))
     jev_model: str = field(default_factory=lambda: _env("JEV_MODEL", "system-one"))
 
+    # Open-Meteo commercial key (free endpoint is non-commercial only)
+    open_meteo_api_key: str = field(default_factory=lambda: _env("OPEN_METEO_API_KEY"))
+
     # Weather — public APIs ask for a contact User-Agent
     user_agent: str = field(default_factory=lambda: _env("NWS_USER_AGENT", "WeatherBotMark3"))
 

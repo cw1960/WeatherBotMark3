@@ -4,6 +4,7 @@
 bot/
 ├── main.py                     # asyncio daemon: discover → observe → evaluate → gate → FOK → audit
 ├── discover_markets.py         # report: every city's markets today/tomorrow + live METAR bucket
+├── edge_report.py              # report: every model's forecast per city, disagreement, TAF
 ├── requirements.txt            # polymarket-client pinned to 0.11.x
 ├── requirements-dev.txt        # + pytest
 ├── .env.example                # copy to .env (git-ignored)
@@ -16,9 +17,12 @@ bot/
     ├── strategy.py             # divergence + Jev gate → TradeSignal | skip
     ├── weather/
     │   ├── metar.py            # aviationweather.gov, every station worldwide in one request
-    │   ├── forecast.py         # model forecast (NEXT: HRRR for US, global model elsewhere)
+    │   ├── forecast.py         # ~10 models via Open-Meteo (HRRR in US) → consensus + spread
+    │   ├── taf.py              # airport forecasts (TAF) for every station, TX max when given
     │   └── afd.py              # NWS Area Forecast Discussion (US offices only)
-    ├── ai/jev.py               # Jev System One via httpx
+    ├── ai/
+    │   ├── evidence.py         # one bundle per city: obs + every model + TAF + AFD + market
+    │   └── jev.py              # Jev System One reads the bundle — every city
     └── exchange/
         ├── markets.py          # Gamma API discovery, bucket parsing, rules verification
         └── polymarket.py       # polymarket-client: order books + FOK-only execution
@@ -37,6 +41,8 @@ bot/
 
 ## Open TODOs before going live
 
-- `weather/forecast.py`: model forecast feed (HRRR for the 11 US cities, a global model for the other 40).
-- Jev gate for non-US cities: NWS discussions only exist for US offices.
-- `strategy.py`: replace the placeholder probability with a real model.
+- `ai/jev.py`: confirm Jev's real API contract (currently assumes OpenAI-compatible chat).
+- `OPEN_METEO_API_KEY`: commercial key required before live trading.
+- `strategy.py`: replace the placeholder probability with a real model (use the model spread
+  and Jev's expected_high to build a distribution over buckets).
+- Daily budget / loss-limit enforcement across trades.

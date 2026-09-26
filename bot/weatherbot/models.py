@@ -64,10 +64,11 @@ class ModelForecast(BaseModel):
 
 
 class JevEvaluation(BaseModel):
-    """Structured output requested from Jev System One for an Area Forecast Discussion."""
+    """Jev System One's verdict on one city's evidence bundle."""
     direction: Literal["warmer", "cooler", "neutral", "uncertain"]
     confidence: float = Field(ge=0.0, le=1.0)
     rationale: str
+    expected_high: float | None = None   # Jev's own point forecast, station unit
     afd_issued_at: datetime | None = None
     afd_excerpt: str | None = None
     raw: dict[str, Any] = Field(default_factory=dict)

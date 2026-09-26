@@ -50,6 +50,9 @@ export type TradeAuditLog = {
   obs_high_so_far: number | null;
   model_high: number | null;
   divergence: number | null;
+  model_spread: number | null;
+  jev_expected_high: number | null;
+  evidence: Record<string, unknown> | null;
   market_outcome: string | null;
   market_price: number | null;
   edge_pct: number | null;

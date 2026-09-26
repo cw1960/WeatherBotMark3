@@ -65,13 +65,18 @@ export function AuditTable({ initial }: { initial: TradeAuditLog[] }) {
               <Td mono>{deg(r.obs_high_so_far, r.unit)}</Td>
               <Td mono>
                 {deg(r.model_high, r.unit)}
-                {r.model_name && <span className="text-[var(--muted)]"> {r.model_name}</span>}
+                {r.model_spread != null && (
+                  <span className="text-[var(--muted)]"> ±{r.model_spread}</span>
+                )}
               </Td>
               <Td mono>{r.divergence == null ? "—" : (r.divergence > 0 ? "+" : "") + r.divergence}</Td>
               <Td>
                 {r.jev_direction ?? "—"}
                 {r.jev_confidence != null && (
                   <span className="text-[var(--muted)]"> {Math.round(r.jev_confidence * 100)}%</span>
+                )}
+                {r.jev_expected_high != null && (
+                  <span className="text-[var(--muted)]"> → {deg(r.jev_expected_high, r.unit)}</span>
                 )}
               </Td>
               <Td>{r.market_outcome ?? "—"}</Td>
