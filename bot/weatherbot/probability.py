@@ -44,9 +44,13 @@ def _phi(x: float) -> float:
 OBS_GAP_SIGMA_C = 0.2   # small allowance that the settled reading differs from what we saw
 
 
-def sigma(hours_remaining: int, unit: str) -> float:
+def sigma(hours_remaining: int, unit: str, sigma_full: float | None = None) -> float:
+    """Uncertainty of further heating. `sigma_full` (station unit) is the learned full-day value
+    for this station (calibration.py); without it the generic default is used."""
     frac = min(max(hours_remaining, 0), 12) / 12
-    return (SIGMA_FLOOR_C + SIGMA_RANGE_C * frac) * _unit_scale(unit)
+    floor_ = SIGMA_FLOOR_C * _unit_scale(unit)
+    full = sigma_full if sigma_full is not None else (SIGMA_FLOOR_C + SIGMA_RANGE_C) * _unit_scale(unit)
+    return floor_ + (max(full, floor_) - floor_) * frac
 
 
 def _rounded(v: float) -> int:
@@ -67,7 +71,7 @@ def model_mean(
 
 def distribution(
     *, observed_high: float | None, means: Iterable[float], hours_remaining: int, unit: str,
-    p_peak_passed: float = 0.0,
+    p_peak_passed: float = 0.0, sigma_full: float | None = None,
 ) -> dict[int, float]:
     """Probability of each whole-degree settlement value.
 
@@ -80,7 +84,7 @@ def distribution(
     """
     means = list(means)
     gap = OBS_GAP_SIGMA_C * _unit_scale(unit)
-    s = sigma(hours_remaining, unit)
+    s = sigma(hours_remaining, unit, sigma_full)
     heating = bool(means) and hours_remaining > 0
     p_none = 1.0 if not heating else min(max(p_peak_passed, 0.0), 1.0)
 
@@ -123,9 +127,13 @@ def bucket_probabilities(dist: dict[int, float], buckets: Iterable[Bucket]) -> d
 def forecast_distribution(
     forecast, observed_high: float | None, unit: str,
     jev_shift_probs: dict[str, float] | None = None, p_peak_passed: float = 0.0,
+    cal=None,
 ) -> dict[int, float]:
-    """Full pipeline for one city: models (+ bias persistence) × Jev shift mixture → settlement
-    value distribution. `forecast` is a weather.forecast.StationForecast."""
+    """Full pipeline for one city: models (+ station calibration + bias persistence) × Jev shift
+    mixture → settlement value distribution. `forecast` is a weather.forecast.StationForecast;
+    `cal` is an optional calibration.StationCal learned by backtest.py."""
+    station_bias = cal.bias if cal is not None else {}
+    sigma_full = cal.sigma if cal is not None else None
     shift_probs = jev_shift_probs or {"as_forecast": 1.0}
     models = list(forecast.models.values())
     hours_remaining = max((m.hours_remaining for m in models), default=0)
@@ -134,15 +142,19 @@ def forecast_distribution(
         if p_cat <= 0:
             continue
         steps = JEV_SHIFT_STEPS.get(cat, 0)
-        means = [
-            mu for m in models
-            if (mu := model_mean(remaining_high=m.remaining_high, elapsed_high=m.elapsed_high,
-                                 observed_high=observed_high, hours_elapsed=m.hours_elapsed,
-                                 unit=unit, shift_steps=steps)) is not None
-        ]
+        means = []
+        for m in models:
+            b = station_bias.get(m.model, 0.0)
+            mu = model_mean(
+                remaining_high=None if m.remaining_high is None else m.remaining_high + b,
+                elapsed_high=None if m.elapsed_high is None else m.elapsed_high + b,
+                observed_high=observed_high, hours_elapsed=m.hours_elapsed,
+                unit=unit, shift_steps=steps)
+            if mu is not None:
+                means.append(mu)
         for k, p in distribution(observed_high=observed_high, means=means,
                                  hours_remaining=hours_remaining, unit=unit,
-                                 p_peak_passed=p_peak_passed).items():
+                                 p_peak_passed=p_peak_passed, sigma_full=sigma_full).items():
             combined[k] = combined.get(k, 0.0) + p_cat * p
     total = sum(combined.values())
     return {k: v / total for k, v in combined.items()} if total else combined

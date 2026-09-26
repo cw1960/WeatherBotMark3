@@ -30,6 +30,7 @@ from polymarket import AsyncPublicClient
 
 from weatherbot.ai.evidence import build_evidence
 from weatherbot.ai.jev import JevClient, build_state
+from weatherbot import calibration
 from weatherbot.probability import bucket_probabilities, forecast_distribution
 from weatherbot.strategy import MAX_PLAUSIBLE_EDGE
 from weatherbot.catalog import CATALOG, to_station
@@ -91,6 +92,7 @@ async def main() -> int:
                         best = min(book.asks, key=lambda lvl: lvl.price)
                         quotes[str(book.asset_id)] = (float(best.price), float(best.size))
 
+    cals = calibration.load()
     jev_verdicts = {}
     if args.jev:
         settings.require("jev_api_key")
@@ -135,7 +137,8 @@ async def main() -> int:
             v = jev_verdicts.get(st.city_slug)
             dist = forecast_distribution(fc, high, st.unit,
                                          jev_shift_probs=v.shift_probs if v else None,
-                                         p_peak_passed=v.p_peak_passed if v else 0.0)
+                                         p_peak_passed=v.p_peak_passed if v else 0.0,
+                                         cal=cals.get(st.icao_code))
             probs = bucket_probabilities(dist, cd.buckets)
             # Closed markets keep stale leftover orders — never treat those as prices.
             asks = {b.label: quotes[b.token_yes][0] for b in cd.buckets
@@ -177,6 +180,8 @@ async def main() -> int:
 
     print()
     print(f"Cities where the models disagree on the bucket: {flagged} of {len(stations)}")
+    print(f"Station calibration: {len(cals)} of {len(stations)} cities "
+          + ("(run backtest.py to create it)" if not cals else "(from backtest.py)"))
     if not settings.open_meteo_api_key:
         print("(Using Open-Meteo's free, non-commercial endpoint. Set OPEN_METEO_API_KEY before live trading.)")
     return 0

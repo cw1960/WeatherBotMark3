@@ -48,7 +48,7 @@ class FakeExecutor:
 def _daemon(monkeypatch, st, today):
     d = daemon_mod.Daemon.__new__(daemon_mod.Daemon)   # skip __init__ (no real DB/http)
     d.db, d.jev, d.executor = FakeDB(), FakeJev(), FakeExecutor()
-    d.tafs, d.afds, d._jev_cache = {}, {}, {}
+    d.tafs, d.afds, d._jev_cache, d.calibration = {}, {}, {}, {}
     labels = [("23°C or below", None, 23)] + [(f"{t}°C", t, t) for t in range(24, 33)] + [("33°C or higher", 33, None)]
     buckets = tuple(Bucket(st.city_slug, today, "e", "s", f"m{i}", f"0x{i}", lab, lo, hi, "C", f"yes{i}", f"no{i}",
                            True, True, False) for i, (lab, lo, hi) in enumerate(labels))

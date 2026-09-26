@@ -35,6 +35,7 @@ import structlog
 from weatherbot import strategy
 from weatherbot.ai.evidence import build_evidence
 from weatherbot.ai.jev import JevClient, build_state
+from weatherbot import calibration
 from weatherbot.probability import bucket_probabilities, forecast_distribution
 from weatherbot.db import Database
 from weatherbot.exchange.markets import CityDay, GammaClient
@@ -79,6 +80,7 @@ class Daemon:
         self.taf = TafClient(self.http)
         self.jev = JevClient()
         self._jev_cache: dict[str, tuple[tuple, JevEvaluation]] = {}
+        self.calibration = calibration.load()   # per-station offsets/sigma from backtest.py
         self.executor = PolymarketExecutor()
         self.markets: dict[tuple[str, date], CityDay] = {}
         self._markets_refreshed_at = 0.0
@@ -98,7 +100,8 @@ class Daemon:
             loop.add_signal_handler(sig, self._stop.set)
 
         async with self.executor:
-            log.info("daemon_start", version="0.2.0", order_type=ORDER_TYPE)
+            log.info("daemon_start", version="0.3.0", order_type=ORDER_TYPE,
+                     calibrated_stations=len(self.calibration))
             while not self._stop.is_set():
                 started = loop.time()
                 try:
@@ -263,7 +266,8 @@ class Daemon:
 
         # Models-only probability for every bucket (code does all the maths).
         buckets = city_day.buckets
-        dist0 = forecast_distribution(station_fc, metar.high_so_far, station.unit)
+        cal = self.calibration.get(station.icao_code)
+        dist0 = forecast_distribution(station_fc, metar.high_so_far, station.unit, cal=cal)
         probs_models_only = bucket_probabilities(dist0, buckets)
 
         # Jev — every city. The NWS discussion only exists for US offices.
@@ -293,7 +297,8 @@ class Daemon:
             self._jev_cache[station.city_slug] = (fingerprint, jev)
 
         dist = forecast_distribution(station_fc, metar.high_so_far, station.unit,
-                                     jev_shift_probs=jev.shift_probs, p_peak_passed=jev.p_peak_passed)
+                                     jev_shift_probs=jev.shift_probs, p_peak_passed=jev.p_peak_passed,
+                                     cal=cal)
         probs = bucket_probabilities(dist, buckets)
         expected_high = round(sum(k * p for k, p in dist.items()), 1)
         audit.update(

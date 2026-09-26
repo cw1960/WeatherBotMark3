@@ -5,6 +5,8 @@ bot/
 ├── main.py                     # asyncio daemon: discover → observe → evaluate → gate → FOK → audit
 ├── discover_markets.py         # report: every city's markets today/tomorrow + live METAR bucket
 ├── edge_report.py              # report: every model per city, bucket probabilities vs prices
+├── backtest.py                 # replay past settled markets → score + learn per-station calibration
+├── calibration/                # station_calibration.json (used by the bot) + backtest_report.txt
 ├── requirements.txt            # polymarket-client pinned to 0.11.x
 ├── requirements-dev.txt        # + pytest
 ├── .env.example                # copy to .env (git-ignored)
@@ -15,6 +17,7 @@ bot/
     ├── models.py               # pydantic records (temps in the station's own unit)
     ├── db.py                   # Supabase: config, stations, market_buckets, audit
     ├── probability.py          # ALL the maths: models + bias persistence + Jev → bucket probabilities
+    ├── calibration.py          # per-station model offsets + spread, learned by backtest.py
     ├── strategy.py             # edge = our probability − best ask → pick bucket, FOK price cap
     ├── weather/
     │   ├── metar.py            # aviationweather.gov, every station worldwide in one request
@@ -44,7 +47,7 @@ bot/
 
 - `TYPESAFE_API_KEY` in bot/.env for Jev.
 - `OPEN_METEO_API_KEY`: commercial key required before live trading.
-- Tune the constants at the top of `probability.py` by backtesting against settled markets.
+- Run `python backtest.py` regularly (e.g. weekly) to refresh `calibration/station_calibration.json`.
 - Daily budget / loss-limit enforcement across trades.
 
 ## How a decision is made (per city, every minute)
