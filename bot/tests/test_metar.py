@@ -1,5 +1,5 @@
 """METAR parsing: T-group precision, unit conversion, local-midnight daily high."""
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from weatherbot.catalog import BY_SLUG, to_station
 from weatherbot.weather.metar import MetarClient, precise_temp_c
@@ -59,3 +59,62 @@ def test_six_hour_max_spanning_midnight_is_ignored():
     items = [_item(datetime(2026, 9, 26, 6, 0, tzinfo=timezone.utc), 18, "METAR KLGA RMK AO2 T01800100 10290")]
     o = MetarClient.summarise(NYC, items, day=date(2026, 9, 26))
     assert o.high_so_far == 64.4 and o.six_hour_max is None   # window starts before local midnight
+
+
+# ---------------------------------------------------------------- the 400-entry cap (live bug)
+import httpx
+from zoneinfo import ZoneInfo
+from weatherbot.catalog import CATALOG
+from weatherbot.weather import metar as metar_mod
+
+
+def _capped_api(peaks: dict[str, float], now: datetime, calls: list):
+    """Fake aviationweather.gov: half-hourly reports for 48 h; peak of the local day at 13:00;
+    returns only the NEWEST 400 entries across all requested ids, like the real API."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        ids = request.url.params["ids"].split(",")
+        hours = int(request.url.params["hours"])
+        calls.append((len(ids), hours))
+        items = []
+        for icao in ids:
+            st = next(to_station(e) for e in CATALOG if e.icao == icao)
+            tz = ZoneInfo(st.timezone)
+            t = now
+            while t > now - timedelta(hours=hours):
+                local = t.astimezone(tz)
+                temp = peaks[icao] if (local.hour == 13 and local.minute < 30 and local.date() == now.astimezone(tz).date()) else peaks[icao] - 4
+                items.append({"icaoId": icao, "obsTime": int(t.timestamp()), "temp": temp, "rawOb": f"METAR {icao}"})
+                t -= timedelta(minutes=30)
+        items.sort(key=lambda it: -it["obsTime"])
+        return httpx.Response(200, json=items[:metar_mod.AWC_MAX_RESULTS])
+    return handler
+
+
+async def test_every_station_keeps_its_midday_peak_despite_the_cap():
+    from datetime import timedelta  # noqa: F811
+    stations = [to_station(e) for e in CATALOG if e.active]
+    now = datetime(2026, 9, 26, 16, 38, tzinfo=timezone.utc)   # the moment of the live report
+    peaks = {s.icao_code: 30.0 for s in stations}
+    calls: list = []
+    client = MetarClient(httpx.AsyncClient(transport=httpx.MockTransport(_capped_api(peaks, now, calls))))
+    obs = await client.fetch_all(stations, now=now)
+    karachi = obs["OPKC"]                                        # 21:38 local, peak was at 13:00
+    assert karachi.high_so_far == 30.0
+    missed = [s.city_slug for s in stations
+              if s.icao_code in obs
+              and datetime.combine(now.astimezone(ZoneInfo(s.timezone)).date(), datetime.min.time().replace(hour=13),
+                                   tzinfo=ZoneInfo(s.timezone)) <= now
+              and obs[s.icao_code].high_so_far != (86.0 if s.unit == "F" else 30.0)]
+    assert missed == [], f"peaks lost to truncation: {missed}"
+    assert all(n <= metar_mod.BATCH for n, _ in calls)
+
+
+async def test_oversized_reply_is_split():
+    calls: list = []
+    now = datetime(2026, 9, 26, 16, 0, tzinfo=timezone.utc)
+    peaks = {"OPKC": 33.0, "VILK": 26.0}
+    client = MetarClient(httpx.AsyncClient(transport=httpx.MockTransport(_capped_api(peaks, now, calls))))
+    # ask for a huge window directly: 2 stations × 300 h × 2/h ≫ 400 → must split to singles
+    items = await client._fetch_complete(["OPKC", "VILK"], 300)
+    assert {n for n, _ in calls} == {2, 1}
+    assert {it["icaoId"] for it in items} == {"OPKC", "VILK"}

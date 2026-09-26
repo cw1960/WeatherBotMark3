@@ -14,6 +14,7 @@ Rules:
 from __future__ import annotations
 
 import re
+from math import ceil
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -28,6 +29,8 @@ from ..settings import settings
 log = structlog.get_logger(__name__)
 
 AWC_METAR = "https://aviationweather.gov/api/data/metar"
+AWC_MAX_RESULTS = 400   # documented cap: "Most endpoints return a maximum of 400 entries"
+BATCH = 4               # 4 stations × ≤26 h × ≤3 reports/h stays under the cap
 _TGROUP = re.compile(r"\bT([01])(\d{3})[01]\d{3}\b")
 # US synoptic remark: 6-hour maximum temperature, e.g. "10267" = +26.7°C (sign digit 0/1).
 # Can exceed the hourly readings; recorded as context only (see summarise).
@@ -84,14 +87,39 @@ class MetarClient:
         r.raise_for_status()
         return r.json()
 
-    async def fetch_all(self, stations: list[Station], hours: int = 36) -> dict[str, MetarObservation]:
+    async def _fetch_complete(self, icaos: list[str], hours: int) -> list[dict]:
+        """Fetch, and if the reply hits the API's 400-entry cap (it silently drops the OLDEST
+        reports — often the ones holding the day's high), split the batch and try again."""
+        items = await self._fetch(icaos, hours)
+        if len(items) < AWC_MAX_RESULTS:
+            return items
+        if len(icaos) == 1:
+            log.error("metar_truncated_single_station", icao=icaos[0], hours=hours)
+            return items
+        mid = len(icaos) // 2
+        return (await self._fetch_complete(icaos[:mid], hours)
+                + await self._fetch_complete(icaos[mid:], hours))
+
+    async def fetch_all(self, stations: list[Station], now: datetime | None = None) -> dict[str, MetarObservation]:
         """Latest reading + running local-day high for every station, in each station's unit.
-        Stations with no report since their local midnight are omitted."""
+        Stations with no report since their local midnight are omitted.
+
+        aviationweather.gov returns at most 400 entries per request, newest first. Asking for
+        40 stations × 36 h silently lost the midday reports (first live run: Karachi 33°C
+        missed, reported 32°C). So: small batches, a window just covering each station's
+        local day, and automatic splitting if a reply still hits the cap."""
+        now = now or datetime.now(timezone.utc)
         by_icao: dict[str, list[dict]] = defaultdict(list)
-        # The API accepts long id lists; chunk defensively.
-        icaos = sorted({s.icao_code for s in stations})
-        for i in range(0, len(icaos), 40):
-            for item in await self._fetch(icaos[i:i + 40], hours):
+        # Order by hours needed so each batch's window is tight.
+        need = sorted(
+            {s.icao_code: max(1, ceil((now - self.local_day_start_utc(s, now.astimezone(ZoneInfo(s.timezone)).date())).total_seconds() / 3600) + 1)
+             for s in stations}.items(),
+            key=lambda kv: kv[1],
+        )
+        for i in range(0, len(need), BATCH):
+            chunk = need[i:i + BATCH]
+            hours = max(h for _, h in chunk)
+            for item in await self._fetch_complete([icao for icao, _ in chunk], hours):
                 by_icao[item.get("icaoId", "")].append(item)
 
         out: dict[str, MetarObservation] = {}

@@ -48,6 +48,7 @@ from weatherbot.weather.taf import Taf, TafClient
 
 MARKET_REFRESH_SECONDS = 15 * 60
 FORECAST_REFRESH_SECONDS = 30 * 60
+METAR_REFRESH_SECONDS = 5 * 60      # aviationweather.gov rate limits; reports come every 30–60 min
 MAX_CONCURRENT_STATIONS = 8
 
 structlog.configure(
@@ -85,6 +86,8 @@ class Daemon:
         self.tafs: dict[str, Taf] = {}
         self.afds: dict[str, tuple[datetime, str]] = {}
         self._forecasts_refreshed_at = 0.0
+        self.observations: dict[str, MetarObservation] = {}
+        self._metar_refreshed_at = 0.0
         self._sem = asyncio.Semaphore(MAX_CONCURRENT_STATIONS)
         self._stop = asyncio.Event()
 
@@ -185,7 +188,10 @@ class Daemon:
             await self.refresh_forecasts(stations)
             self._forecasts_refreshed_at = time.monotonic()
 
-        observations = await self.metar.fetch_all(stations)
+        if time.monotonic() - self._metar_refreshed_at > METAR_REFRESH_SECONDS:
+            self.observations = await self.metar.fetch_all(stations)
+            self._metar_refreshed_at = time.monotonic()
+        observations = self.observations
         cluster_id = str(uuid.uuid4())
         log.info("cycle_start", stations=len(stations), with_metar=len(observations),
                  trading_active=cfg.trading_active)
