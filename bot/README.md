@@ -7,6 +7,7 @@ bot/
 ├── edge_report.py              # report: every model per city, bucket probabilities vs prices
 ├── backtest.py                 # replay past settled markets → score + learn per-station calibration
 ├── peak_times.py               # when does each city's daily high happen? → calibration/peak_times.json
+├── intraday_backtest.py        # edge test at 2 h / 1 h before each city's typical peak
 ├── calibration/                # station_calibration.json (used by the bot) + backtest_report.txt
 ├── requirements.txt            # polymarket-client pinned to 0.11.x
 ├── requirements-dev.txt        # + pytest

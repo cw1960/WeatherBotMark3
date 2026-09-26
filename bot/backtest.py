@@ -209,6 +209,28 @@ async def price_at(http, sem, token: str, ts: int) -> float | None:
     return float(pts[-1]["p"]) if pts else None
 
 
+# ----------------------------------------------------------------------------- loading
+async def load_station_history(http, sem, st: Station, days: list[date], start: date, end: date):
+    """Settled markets + each model's hourly 24-h-lead forecasts for one station.
+    Returns (records, hourly {model: (times, temps °C)}, settled {day: (buckets, winner)})."""
+    settled = await asyncio.gather(*(fetch_settled(http, sem, st, d) for d in days))
+    have = {d: s for d, s in zip(days, settled) if s}
+    models = US_ONLY_MODELS + GLOBAL_MODELS if st.country == "US" else GLOBAL_MODELS
+    fetched = await asyncio.gather(*(fetch_model_history(http, sem, st, m, start, end) for m in models))
+    hourly = {m: h for m, h in zip(models, fetched) if h}
+    maxima = {m: local_day_maxima(st, h[0], h[1], set(have)) for m, h in hourly.items()}
+    records = []
+    for d, (buckets, winner) in sorted(have.items()):
+        mm = {m: v[d] for m, v in maxima.items() if d in v}
+        if not mm:
+            continue
+        wb = next(b for b in buckets if b.label == winner)
+        bounded = wb.lower is not None and wb.upper is not None
+        records.append((DayRecord(d, mm, truth_value(wb), wb.lower if bounded else None,
+                                  wb.upper if bounded else None), buckets, winner))
+    return records, hourly, have
+
+
 # ----------------------------------------------------------------------------- scoring
 def predict(rec: DayRecord, cal: StationCal | None, unit: str, buckets: list[Bucket]) -> dict[str, float]:
     """Bot's probabilities at local midnight: no observations yet, a full day of heating ahead."""
@@ -331,25 +353,10 @@ async def main() -> int:
     sem = asyncio.Semaphore(4)
     async with httpx.AsyncClient(headers={"User-Agent": settings.user_agent}) as http:
         for i, st in enumerate(stations, 1):
-            settled = await asyncio.gather(*(fetch_settled(http, sem, st, d) for d in days))
-            have = {d: s for d, s in zip(days, settled) if s}
-            models = US_ONLY_MODELS + GLOBAL_MODELS if st.country == "US" else GLOBAL_MODELS
-            hist = await asyncio.gather(*(fetch_model_history(http, sem, st, m, start, end) for m in models))
-            maxima: dict[str, dict[date, float]] = {}
-            for m, h in zip(models, hist):
-                if h:
-                    maxima[m] = local_day_maxima(st, h[0], h[1], set(have))
-            for d, (buckets, winner) in sorted(have.items()):
-                mm = {m: v[d] for m, v in maxima.items() if d in v}
-                if not mm:
-                    continue
-                wb = next(b for b in buckets if b.label == winner)
-                bounded = wb.lower is not None and wb.upper is not None
-                records[st.city_slug].append((DayRecord(d, mm, truth_value(wb),
-                                                        wb.lower if bounded else None,
-                                                        wb.upper if bounded else None), buckets, winner))
+            recs, hist, have = await load_station_history(http, sem, st, days, start, end)
+            records[st.city_slug] = recs
             print(f"  [{i:>2}/{len(stations)}] {st.city_label:<14} settled days={len(have):>3}  "
-                  f"models with history={len(maxima)}  usable days={len(records[st.city_slug])}")
+                  f"models with history={len(hist)}  usable days={len(recs)}")
 
         # ------------------------------------------------ walk-forward scoring
         generic, calibrated = Score("Generic settings (today's bot)"), Score("Station-calibrated")
