@@ -1,14 +1,18 @@
 """
-Divergence strategy: METAR ground truth vs HRRR model, gated by Jev's AFD read.
+Divergence strategy: METAR ground truth vs model forecast, gated by Jev's AFD read.
 
-This is deliberately thin — it returns a TradeSignal or a skip reason, and the
-main loop handles the trading_active gate and audit logging.
+Deliberately thin and unit-agnostic (every temperature is in the station's own unit).
+It returns a TradeSignal or a skip reason; the main loop handles the trading_active
+gate and audit logging.
+
+The thresholds in config (min_divergence_deg) are in degrees of the station's unit, so a
+2.0 threshold means 2°F for US cities and 2°C elsewhere. Revisit when tuning.
 """
 from __future__ import annotations
 
 from datetime import date
 
-from .models import BotConfig, HrrrForecast, JevEvaluation, MetarObservation, Station, TradeSignal
+from .models import BotConfig, JevEvaluation, MetarObservation, ModelForecast, Station, TradeSignal
 
 
 def evaluate(
@@ -16,17 +20,17 @@ def evaluate(
     station: Station,
     cfg: BotConfig,
     metar: MetarObservation,
-    hrrr: HrrrForecast,
+    forecast: ModelForecast,
     jev: JevEvaluation,
     target_date: date,
     outcome_label: str,
     token_id: str,
     market_price: float,
 ) -> tuple[TradeSignal | None, str | None]:
-    divergence = round(metar.high_so_far_f - hrrr.high_f, 1)
+    divergence = round(metar.high_so_far - forecast.high, 1)
 
     if abs(divergence) < cfg.min_divergence_deg:
-        return None, f"divergence {divergence:+.1f}°F below threshold {cfg.min_divergence_deg}"
+        return None, f"divergence {divergence:+.1f}°{station.unit} below threshold {cfg.min_divergence_deg}"
 
     if jev.confidence < cfg.min_jev_confidence:
         return None, f"jev confidence {jev.confidence:.2f} below {cfg.min_jev_confidence}"
@@ -56,6 +60,6 @@ def evaluate(
         implied_probability=implied_probability,
         model_probability=model_probability,
         edge_pct=edge_pct,
-        divergence_f=divergence,
+        divergence=divergence,
     )
     return signal, None

@@ -3,6 +3,10 @@ Environment-driven settings.
 
 Every credential is read from os.environ (populated from bot/.env via python-dotenv).
 Nothing here is ever written to disk.
+
+Only Supabase is required to start. Polymarket and Jev credentials are optional at
+load time so the discovery tool and simulation mode run without them; the modules
+that need them call `require()` and fail loudly at the point of use.
 """
 from __future__ import annotations
 
@@ -16,38 +20,44 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 
-def _req(name: str) -> str:
-    value = os.environ.get(name)
-    if not value:
-        raise RuntimeError(f"Missing required environment variable: {name}")
-    return value
+def _env(name: str, default: str = "") -> str:
+    return os.environ.get(name, default).strip()
 
 
 @dataclass(frozen=True)
 class Settings:
     # Supabase
-    supabase_url: str = field(default_factory=lambda: _req("SUPABASE_URL"))
-    supabase_service_role_key: str = field(default_factory=lambda: _req("SUPABASE_SERVICE_ROLE_KEY"))
+    supabase_url: str = field(default_factory=lambda: _env("SUPABASE_URL"))
+    supabase_service_role_key: str = field(default_factory=lambda: _env("SUPABASE_SERVICE_ROLE_KEY"))
 
-    # Polymarket
-    pm_private_key: str = field(default_factory=lambda: _req("POLYMARKET_PRIVATE_KEY"))
-    pm_funder_address: str = field(default_factory=lambda: os.environ.get("POLYMARKET_FUNDER_ADDRESS", ""))
-    pm_api_key: str = field(default_factory=lambda: os.environ.get("POLYMARKET_API_KEY", ""))
-    pm_api_secret: str = field(default_factory=lambda: os.environ.get("POLYMARKET_API_SECRET", ""))
-    pm_api_passphrase: str = field(default_factory=lambda: os.environ.get("POLYMARKET_API_PASSPHRASE", ""))
-    pm_chain_id: int = field(default_factory=lambda: int(os.environ.get("POLYMARKET_CHAIN_ID", "137")))
+    # Polymarket (API creds are derived from the private key by the SDK if omitted)
+    pm_private_key: str = field(default_factory=lambda: _env("POLYMARKET_PRIVATE_KEY"))
+    pm_wallet_address: str = field(default_factory=lambda: _env("POLYMARKET_FUNDER_ADDRESS"))
 
     # Jev
-    jev_api_url: str = field(default_factory=lambda: os.environ.get("JEV_API_URL", "https://api.jev.ai/v1"))
-    jev_api_key: str = field(default_factory=lambda: _req("JEV_API_KEY"))
-    jev_model: str = field(default_factory=lambda: os.environ.get("JEV_MODEL", "system-one"))
+    jev_api_url: str = field(default_factory=lambda: _env("JEV_API_URL", "https://api.jev.ai/v1"))
+    jev_api_key: str = field(default_factory=lambda: _env("JEV_API_KEY"))
+    jev_model: str = field(default_factory=lambda: _env("JEV_MODEL", "system-one"))
 
-    # Weather
-    nws_user_agent: str = field(default_factory=lambda: _req("NWS_USER_AGENT"))
-    madis_api_token: str = field(default_factory=lambda: os.environ.get("MADIS_API_TOKEN", ""))
+    # Weather — public APIs ask for a contact User-Agent
+    user_agent: str = field(default_factory=lambda: _env("NWS_USER_AGENT", "WeatherBotMark3"))
 
     # Runtime
-    log_level: str = field(default_factory=lambda: os.environ.get("LOG_LEVEL", "INFO"))
+    log_level: str = field(default_factory=lambda: _env("LOG_LEVEL", "INFO"))
+
+    def require(self, *names: str) -> None:
+        missing = [n for n in names if not getattr(self, n)]
+        if missing:
+            env_names = {
+                "supabase_url": "SUPABASE_URL",
+                "supabase_service_role_key": "SUPABASE_SERVICE_ROLE_KEY",
+                "pm_private_key": "POLYMARKET_PRIVATE_KEY",
+                "jev_api_key": "JEV_API_KEY",
+            }
+            raise RuntimeError(
+                "Missing required environment variable(s) in bot/.env: "
+                + ", ".join(env_names.get(n, n) for n in missing)
+            )
 
 
 settings = Settings()

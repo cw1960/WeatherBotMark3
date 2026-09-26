@@ -20,10 +20,10 @@ log = structlog.get_logger(__name__)
 
 SYSTEM_PROMPT = """You are a meteorology analyst. You will be given a National Weather Service
 Area Forecast Discussion (AFD), the current observed running daily high at a specific METAR
-station, and the HRRR model's forecast high for that station.
+station, and a numerical model's forecast high for that station.
 
 Decide whether the forecasters' language suggests the actual daily high will end up
-WARMER, COOLER, or NEUTRAL relative to the HRRR forecast high, or UNCERTAIN if the AFD
+WARMER, COOLER, or NEUTRAL relative to the model forecast high, or UNCERTAIN if the AFD
 does not address it. Weigh explicit statements about model biases, cloud cover timing,
 frontal passage, mixing, and forecaster confidence.
 
@@ -42,13 +42,16 @@ class JevClient:
         icao_code: str,
         afd_text: str,
         afd_issued_at: datetime,
-        observed_high_f: float,
-        hrrr_high_f: float,
+        observed_high: float,
+        model_high: float,
+        model_name: str,
+        unit: str,
     ) -> JevEvaluation:
+        settings.require("jev_api_key")
         user_msg = (
             f"Station: {icao_code}\n"
-            f"Observed running high so far: {observed_high_f:.1f}°F\n"
-            f"HRRR forecast high: {hrrr_high_f:.1f}°F\n\n"
+            f"Observed running high so far: {observed_high:.1f}°{unit}\n"
+            f"{model_name.upper()} forecast high: {model_high:.1f}°{unit}\n\n"
             f"--- AFD (issued {afd_issued_at.isoformat()}) ---\n{afd_text[:12000]}"
         )
         payload = {

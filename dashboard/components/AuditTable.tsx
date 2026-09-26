@@ -42,10 +42,10 @@ export function AuditTable({ initial }: { initial: TradeAuditLog[] }) {
         <thead className="bg-[var(--card)] text-[var(--muted)]">
           <tr>
             <Th>Time (UTC)</Th>
-            <Th>Station</Th>
-            <Th>METAR hi</Th>
-            <Th>HRRR hi</Th>
-            <Th>Δ°F</Th>
+            <Th>City</Th>
+            <Th>Obs high</Th>
+            <Th>Model high</Th>
+            <Th>Δ</Th>
             <Th>Jev</Th>
             <Th>Outcome</Th>
             <Th>Price</Th>
@@ -58,10 +58,16 @@ export function AuditTable({ initial }: { initial: TradeAuditLog[] }) {
           {rows.map((r) => (
             <tr key={r.id} className="border-t border-[var(--border)]">
               <Td mono>{new Date(r.created_at).toISOString().slice(5, 19).replace("T", " ")}</Td>
-              <Td mono>{r.icao_code}</Td>
-              <Td mono>{fmt(r.metar_high_so_far_f)}</Td>
-              <Td mono>{fmt(r.hrrr_high_f)}</Td>
-              <Td mono>{r.divergence_f == null ? "—" : (r.divergence_f > 0 ? "+" : "") + r.divergence_f}</Td>
+              <Td mono>
+                {r.city_slug ?? r.icao_code}
+                <span className="text-[var(--muted)]"> {r.icao_code}</span>
+              </Td>
+              <Td mono>{deg(r.obs_high_so_far, r.unit)}</Td>
+              <Td mono>
+                {deg(r.model_high, r.unit)}
+                {r.model_name && <span className="text-[var(--muted)]"> {r.model_name}</span>}
+              </Td>
+              <Td mono>{r.divergence == null ? "—" : (r.divergence > 0 ? "+" : "") + r.divergence}</Td>
               <Td>
                 {r.jev_direction ?? "—"}
                 {r.jev_confidence != null && (
@@ -93,6 +99,9 @@ export function AuditTable({ initial }: { initial: TradeAuditLog[] }) {
   );
 }
 
+function deg(n: number | null, unit: TradeAuditLog["unit"]) {
+  return n == null ? "—" : `${n.toFixed(1)}°${unit ?? ""}`;
+}
 function fmt(n: number | null, d = 1) {
   return n == null ? "—" : n.toFixed(d);
 }

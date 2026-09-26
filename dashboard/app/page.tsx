@@ -19,6 +19,8 @@ export default async function Dashboard() {
       .returns<TradeAuditLog[]>(),
   ]);
 
+  const activeCount = (stations ?? []).filter((s) => s.is_active).length;
+
   return (
     <div className="space-y-8">
       <section className="grid gap-4 md:grid-cols-3">
@@ -36,20 +38,28 @@ export default async function Dashboard() {
             <Row k="Max budget" v={`$${config?.max_budget_usdc ?? "—"}`} />
             <Row k="Max per order" v={`$${config?.max_order_usdc ?? "—"}`} />
             <Row k="Daily loss limit" v={`$${config?.daily_loss_limit_usdc ?? "—"}`} />
-            <Row k="Min divergence" v={`${config?.min_divergence_deg ?? "—"}°F`} />
+            <Row k="Min divergence" v={`${config?.min_divergence_deg ?? "—"}°`} />
             <Row k="Min Jev confidence" v={`${config?.min_jev_confidence ?? "—"}`} />
           </dl>
         </div>
 
         <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-4">
-          <h2 className="mb-3 text-sm font-medium text-[var(--muted)]">Stations</h2>
-          <ul className="space-y-1 text-sm">
+          <h2 className="mb-3 flex justify-between text-sm font-medium text-[var(--muted)]">
+            <span>Cities</span>
+            <span>
+              {activeCount} active / {(stations ?? []).length}
+            </span>
+          </h2>
+          <ul className="max-h-56 space-y-1 overflow-y-auto pr-1 text-sm">
             {(stations ?? []).map((s) => (
-              <li key={s.id} className="flex justify-between">
+              <li
+                key={s.id}
+                className={`flex justify-between ${s.is_active ? "" : "opacity-40"}`}
+                title={`${s.airport_name ?? ""} · resolves via ${s.resolution_source}`}
+              >
                 <span>{s.city_label}</span>
                 <span className="font-mono text-[var(--muted)]">
-                  {s.icao_code}
-                  {!s.is_active && " · off"}
+                  {s.icao_code} · °{s.unit}
                 </span>
               </li>
             ))}

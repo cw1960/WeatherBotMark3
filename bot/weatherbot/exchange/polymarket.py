@@ -1,88 +1,120 @@
 """
-Polymarket execution via the modern `polymarket-client` SDK.
+Polymarket execution via the official `polymarket-client` SDK (v0.11, `import polymarket`).
+
+Checked against the installed SDK source (2026-09-26):
+  * Order books come from AsyncPublicClient.get_order_book(token_id=...) — no auth needed,
+    so simulation mode never needs a private key. Asks are sorted DESCENDING (best ask last).
+  * A Fill-Or-Kill order with a price cap is
+        AsyncSecureClient.place_market_order(token_id=, side="BUY", amount=<USDC>,
+                                             max_price=<cap>, order_type="FOK")
+    `order_type` defaults to "FAK" in the SDK, so we ALWAYS pass ORDER_TYPE explicitly.
+    (`place_limit_order` has no order-type option — it rests on the book like GTC — so it is
+    never used here.)
+  * The response is AcceptedOrder (ok=True, status 'matched' | 'live' | 'delayed') or
+    RejectedOrder (ok=False, code e.g. 'fok_not_filled').
 
 Hard rules enforced here, not left to callers:
-  * Every order is OrderType.FOK. There is no code path that produces GTC.
+  * ORDER_TYPE is the constant "FOK". There is no code path that sends anything else.
   * Credentials come from settings (os.environ) only.
-  * `trading_active` is re-read by the caller immediately before `place_fok()`;
-    this module additionally refuses to place anything if `live` is False.
-
-NOTE: method names on AsyncSecureClient (create_order / post_order / get_order_book)
-should be checked against the installed SDK version; they are marked below.
+  * The caller re-reads config.trading_active immediately before place_fok();
+    this module also refuses to touch the API unless live=True.
 """
 from __future__ import annotations
 
-from typing import Any
+from decimal import Decimal
+from typing import Any, Final
 
 import structlog
-
-from polymarket import AsyncSecureClient  # modern SDK — NOT py-clob-client
-from polymarket.types import OrderType, Side  # TODO: confirm import path in installed version
+from polymarket import AsyncPublicClient, AsyncSecureClient
 
 from ..models import ExecutionResult, TradeSignal
 from ..settings import settings
 
 log = structlog.get_logger(__name__)
 
+ORDER_TYPE: Final = "FOK"
+
 
 class PolymarketExecutor:
     def __init__(self) -> None:
-        self._client: AsyncSecureClient | None = None
+        self._public: AsyncPublicClient | None = None
+        self._secure: AsyncSecureClient | None = None
 
     async def __aenter__(self) -> "PolymarketExecutor":
-        self._client = AsyncSecureClient(  # TODO: confirm constructor kwargs
-            private_key=settings.pm_private_key,
-            chain_id=settings.pm_chain_id,
-            funder=settings.pm_funder_address or None,
-            api_key=settings.pm_api_key or None,
-            api_secret=settings.pm_api_secret or None,
-            api_passphrase=settings.pm_api_passphrase or None,
-        )
+        self._public = AsyncPublicClient()
+        await self._public.__aenter__()
         return self
 
     async def __aexit__(self, *exc: Any) -> None:
-        if self._client is not None:
-            await self._client.close()  # TODO: confirm
+        if self._secure is not None:
+            await self._secure.close()
+        if self._public is not None:
+            await self._public.close()
+
+    async def _secure_client(self) -> AsyncSecureClient:
+        """Created lazily, only the first time a LIVE order is sent."""
+        if self._secure is None:
+            settings.require("pm_private_key")
+            self._secure = await AsyncSecureClient.create(
+                private_key=settings.pm_private_key,
+                wallet=settings.pm_wallet_address or None,
+            )
+        return self._secure
 
     # ------------------------------------------------------------- market data
-    async def best_ask(self, token_id: str) -> float | None:
-        assert self._client is not None
-        book = await self._client.get_order_book(token_id)  # TODO: confirm
-        asks = getattr(book, "asks", None) or book.get("asks", [])
-        if not asks:
+    async def best_ask(self, token_id: str) -> tuple[float, float] | None:
+        """(best ask price, size available at it) for a token, or None if the book is empty."""
+        assert self._public is not None, "use `async with PolymarketExecutor()`"
+        book = await self._public.get_order_book(token_id=token_id)
+        if not book.asks:
             return None
-        return float(min(float(a.price if hasattr(a, "price") else a["price"]) for a in asks))
+        best = min(book.asks, key=lambda lvl: lvl.price)  # don't rely on sort order
+        return float(best.price), float(best.size)
 
     # --------------------------------------------------------------- execution
     async def place_fok(self, signal: TradeSignal, *, live: bool) -> ExecutionResult:
-        """
-        Fill-Or-Kill limit order. `live` must be the freshly-read config.trading_active.
-        When live is False we return a SIMULATED result and never touch the API.
-        """
+        """Fill-Or-Kill BUY capped at signal.price. `live` must be the freshly-read
+        config.trading_active; when False we return SIMULATED and never call the API."""
         if not live:
-            log.info("simulated_fok", token=signal.token_id, side=signal.side,
-                     price=signal.price, size_usdc=signal.size_usdc)
-            return ExecutionResult(status="SIMULATED", fill_size=None, fill_price=None,
-                                   raw={"simulated": True, "signal": signal.model_dump(mode="json")})
+            log.info("simulated_fok", token=signal.token_id, price_cap=signal.price,
+                     size_usdc=signal.size_usdc, city=signal.station.city_slug)
+            return ExecutionResult(status="SIMULATED",
+                                   raw={"simulated": True, "order_type": ORDER_TYPE,
+                                        "signal": signal.model_dump(mode="json")})
 
-        assert self._client is not None
+        if signal.side != "BUY":
+            return ExecutionResult(status="REJECTED", error_message="only BUY is implemented")
+
         try:
-            order = await self._client.create_order(  # TODO: confirm signature
+            client = await self._secure_client()
+            resp = await client.place_market_order(
                 token_id=signal.token_id,
-                side=Side.BUY if signal.side == "BUY" else Side.SELL,
-                price=signal.price,
-                size=round(signal.size_usdc / signal.price, 2),  # shares
-            )
-            resp = await self._client.post_order(order, order_type=OrderType.FOK)  # FOK, always
-            status = str(getattr(resp, "status", resp.get("status", ""))).upper()
-            mapped = "FILLED" if status in {"MATCHED", "FILLED"} else "KILLED"
-            return ExecutionResult(
-                order_id=getattr(resp, "order_id", None) or resp.get("orderID"),
-                status=mapped,
-                fill_size=getattr(resp, "size_matched", None),
-                fill_price=signal.price if mapped == "FILLED" else None,
-                raw=resp if isinstance(resp, dict) else getattr(resp, "__dict__", {}),
+                side="BUY",
+                amount=Decimal(str(signal.size_usdc)),
+                max_price=Decimal(str(signal.price)),
+                order_type=ORDER_TYPE,
             )
         except Exception as exc:
             log.error("fok_error", error=str(exc), token=signal.token_id)
             return ExecutionResult(status="ERROR", error_message=str(exc))
+
+        raw = resp.model_dump(mode="json")
+        if not resp.ok:
+            status = "KILLED" if resp.code == "fok_not_filled" else "REJECTED"
+            return ExecutionResult(status=status, raw=raw, error_message=f"{resp.code}: {resp.message}")
+
+        # BUY: making_amount = USDC paid, taking_amount = shares received.
+        shares = float(resp.taking_amount)
+        paid = float(resp.making_amount)
+        if resp.status == "delayed":
+            # Matching engine queued it; outcome unknown right now. Flag for manual check.
+            return ExecutionResult(order_id=resp.order_id, status="ERROR", raw=raw,
+                                   error_message="order delayed by exchange — verify fill manually")
+        filled = resp.status == "matched" and shares > 0
+        return ExecutionResult(
+            order_id=resp.order_id,
+            status="FILLED" if filled else "KILLED",
+            fill_size=shares or None,
+            fill_price=(paid / shares) if shares else None,
+            raw=raw,
+        )

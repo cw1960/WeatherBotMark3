@@ -1,4 +1,7 @@
-"""Typed records shared across modules (mirror the Supabase schema)."""
+"""Typed records shared across modules (mirror the Supabase schema).
+
+Temperatures are always in the station's own market unit ('F' or 'C').
+"""
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -7,18 +10,24 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+Unit = Literal["F", "C"]
+
 
 class Station(BaseModel):
     id: UUID
+    city_slug: str
     city_label: str
     icao_code: str
+    airport_name: str | None = None
+    rules_phrase: str | None = None
+    unit: Unit = "F"
+    timezone: str
+    latitude: float | None = None
+    longitude: float | None = None
+    elevation_m: int | None = None
+    country: str | None = None
+    resolution_source: Literal["noaa", "wunderground", "hko"] = "noaa"
     nws_office: str | None = None
-    nws_gridpoint: str | None = None
-    timezone: str = "America/New_York"
-    polymarket_market_id: str
-    polymarket_condition_id: str
-    polymarket_slug: str | None = None
-    unit: Literal["F", "C"] = "F"
     is_active: bool = True
 
 
@@ -38,16 +47,20 @@ class BotConfig(BaseModel):
 class MetarObservation(BaseModel):
     icao_code: str
     observed_at: datetime
-    temp_f: float
-    high_so_far_f: float
+    temp: float              # latest reading, station unit
+    high_so_far: float       # max since local midnight, station unit
+    unit: Unit
+    n_obs_today: int = 0
     raw: str | None = None
 
 
-class HrrrForecast(BaseModel):
+class ModelForecast(BaseModel):
     icao_code: str
-    run_time: datetime
+    model: str               # e.g. 'hrrr', 'ecmwf_ifs025'
+    run_time: datetime | None = None
     target_date: date
-    high_f: float
+    high: float              # forecast daily max, station unit
+    unit: Unit
 
 
 class JevEvaluation(BaseModel):
@@ -66,13 +79,13 @@ class TradeSignal(BaseModel):
     outcome_label: str
     token_id: str
     side: Literal["BUY", "SELL"]
-    price: float
+    price: float             # FOK price cap (max price for BUY)
     size_usdc: float
     market_price: float
     implied_probability: float
     model_probability: float
     edge_pct: float
-    divergence_f: float
+    divergence: float
 
 
 class ExecutionResult(BaseModel):

@@ -2,44 +2,41 @@
 
 ```
 bot/
-├── main.py                     # asyncio daemon: poll → evaluate → gate → FOK → audit
-├── requirements.txt
-├── pyproject.toml
+├── main.py                     # asyncio daemon: discover → observe → evaluate → gate → FOK → audit
+├── discover_markets.py         # report: every city's markets today/tomorrow + live METAR bucket
+├── requirements.txt            # polymarket-client pinned to 0.11.x
+├── requirements-dev.txt        # + pytest
 ├── .env.example                # copy to .env (git-ignored)
-├── tests/test_strategy.py
+├── tests/                      # tests: markets, METAR, catalog, strategy, execution safety
 └── weatherbot/
+    ├── catalog.py              # ALL 51 cities → verified ICAO station, unit, timezone, rules phrase
     ├── settings.py             # all creds from os.environ
-    ├── models.py               # pydantic records mirroring the Supabase schema
-    ├── db.py                   # Supabase (service_role) — config, stations, audit
+    ├── models.py               # pydantic records (temps in the station's own unit)
+    ├── db.py                   # Supabase: config, stations, market_buckets, audit
     ├── strategy.py             # divergence + Jev gate → TradeSignal | skip
     ├── weather/
-    │   ├── metar.py            # NWS observations by exact ICAO
-    │   ├── hrrr.py             # HRRR forecast high (TODO: real source)
-    │   └── afd.py              # Area Forecast Discussion text by WFO
+    │   ├── metar.py            # aviationweather.gov, every station worldwide in one request
+    │   ├── forecast.py         # model forecast (NEXT: HRRR for US, global model elsewhere)
+    │   └── afd.py              # NWS Area Forecast Discussion (US offices only)
     ├── ai/jev.py               # Jev System One via httpx
-    └── exchange/polymarket.py  # polymarket-client AsyncSecureClient, FOK only
+    └── exchange/
+        ├── markets.py          # Gamma API discovery, bucket parsing, rules verification
+        └── polymarket.py       # polymarket-client: order books + FOK-only execution
 ```
 
-## Run locally
+## Safety rails
 
-```bash
-cd bot
-python3.11 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env   # fill in
-pytest                 # strategy smoke tests
-python main.py
-```
-
-## Deploy (US-East Linux VPS)
-
-Run as a systemd service with `EnvironmentFile=/opt/weatherbot/bot/.env` and
-`Restart=always`. Keep `config.trading_active = false` until simulated audit rows
-look right in the dashboard.
+- **Station mapping** lives in `weatherbot/catalog.py`, checked against every market's rules
+  on 2026-09-26. Each day the bot re-reads the rules; if they stop naming the catalogued
+  airport, that city is marked not tradeable (`rules_ok = false`) until the catalog is fixed.
+- **FOK only**: `exchange/polymarket.py` sends `place_market_order(..., max_price=cap,
+  order_type="FOK")`. A test fails the build if `GTC`, `GTD`, `FAK` or `place_limit_order`
+  appears anywhere in the bot.
+- **Kill switch**: `config.trading_active` is re-read right before each order. When false the
+  bot never even creates an authenticated Polymarket client.
 
 ## Open TODOs before going live
 
-- `exchange/polymarket.py`: confirm `AsyncSecureClient` constructor / `create_order` / `post_order` names against the installed `polymarket-client` version.
-- `weather/hrrr.py`: pick and implement the HRRR source (NOMADS grib_filter or Open-Meteo).
-- `main.py`: map `metar.high_so_far_f` → the correct outcome bucket and CLOB `token_id` via the Gamma API for each market.
-- `ai/jev.py`: verify Jev's endpoint path and JSON response shape.
+- `weather/forecast.py`: model forecast feed (HRRR for the 11 US cities, a global model for the other 40).
+- Jev gate for non-US cities: NWS discussions only exist for US offices.
+- `strategy.py`: replace the placeholder probability with a real model.

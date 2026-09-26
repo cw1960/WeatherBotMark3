@@ -25,7 +25,7 @@ class AfdClient:
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8), reraise=True)
     async def latest(self, wfo: str) -> tuple[datetime, str] | None:
-        headers = {"User-Agent": settings.nws_user_agent}
+        headers = {"User-Agent": settings.user_agent}
         r = await self._http.get(f"{NWS_BASE}/products/types/AFD/locations/{wfo}", headers=headers)
         r.raise_for_status()
         products = r.json().get("@graph", [])
