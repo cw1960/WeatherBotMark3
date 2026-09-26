@@ -1,0 +1,608 @@
+{
+  "meta": {
+    "generated": "2026-09-26T21:25:58.415053+00:00",
+    "period": "2026-07-27..2026-09-24",
+    "offsets_min_before_peak": [
+      120,
+      60
+    ]
+  },
+  "offsets": {
+    "60": {
+      "default_c": {
+        "sigma": 0.7,
+        "obs_gap": 0.4,
+        "n_days": 0,
+        "logloss": null
+      },
+      "stations": {
+        "CYYZ": {
+          "sigma": 0.5,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 1.075
+        },
+        "EDDM": {
+          "sigma": 0.7,
+          "obs_gap": 0.4,
+          "n_days": 46,
+          "logloss": 1.034
+        },
+        "EFHK": {
+          "sigma": 0.6,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 0.995
+        },
+        "EGLC": {
+          "sigma": 0.5,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 0.934
+        },
+        "EHAM": {
+          "sigma": 0.5,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 0.993
+        },
+        "EPWA": {
+          "sigma": 0.4,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 0.843
+        },
+        "FACT": {
+          "sigma": 0.6,
+          "obs_gap": 0.4,
+          "n_days": 45,
+          "logloss": 1.388
+        },
+        "KATL": {
+          "sigma": 1.08,
+          "obs_gap": 1.26,
+          "n_days": 46,
+          "logloss": 0.93
+        },
+        "KAUS": {
+          "sigma": 1.44,
+          "obs_gap": 1.8,
+          "n_days": 46,
+          "logloss": 1.126
+        },
+        "KBKF": {
+          "sigma": 1.62,
+          "obs_gap": 0.36,
+          "n_days": 46,
+          "logloss": 1.301
+        },
+        "KDAL": {
+          "sigma": 1.26,
+          "obs_gap": 1.8,
+          "n_days": 46,
+          "logloss": 0.892
+        },
+        "KHOU": {
+          "sigma": 0.9,
+          "obs_gap": 1.26,
+          "n_days": 46,
+          "logloss": 1.05
+        },
+        "KLAX": {
+          "sigma": 1.44,
+          "obs_gap": 1.8,
+          "n_days": 46,
+          "logloss": 1.305
+        },
+        "KLGA": {
+          "sigma": 1.08,
+          "obs_gap": 0.36,
+          "n_days": 46,
+          "logloss": 1.014
+        },
+        "KMIA": {
+          "sigma": 1.08,
+          "obs_gap": 0.36,
+          "n_days": 46,
+          "logloss": 0.979
+        },
+        "KORD": {
+          "sigma": 0.9,
+          "obs_gap": 1.26,
+          "n_days": 46,
+          "logloss": 1.159
+        },
+        "KSEA": {
+          "sigma": 1.08,
+          "obs_gap": 1.26,
+          "n_days": 46,
+          "logloss": 0.901
+        },
+        "KSFO": {
+          "sigma": 1.44,
+          "obs_gap": 1.26,
+          "n_days": 44,
+          "logloss": 1.252
+        },
+        "LEMD": {
+          "sigma": 0.5,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 0.84
+        },
+        "LFPB": {
+          "sigma": 0.3,
+          "obs_gap": 0.7,
+          "n_days": 46,
+          "logloss": 0.861
+        },
+        "LIMC": {
+          "sigma": 0.9,
+          "obs_gap": 0.7,
+          "n_days": 46,
+          "logloss": 1.084
+        },
+        "LLBG": {
+          "sigma": 0.7,
+          "obs_gap": 0.2,
+          "n_days": 45,
+          "logloss": 1.268
+        },
+        "LTAC": {
+          "sigma": 0.6,
+          "obs_gap": 0.7,
+          "n_days": 46,
+          "logloss": 0.958
+        },
+        "LTFM": {
+          "sigma": 0.4,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 0.951
+        },
+        "MMMX": {
+          "sigma": 0.5,
+          "obs_gap": 0.7,
+          "n_days": 46,
+          "logloss": 1.062
+        },
+        "MPMG": {
+          "sigma": 0.8,
+          "obs_gap": 0.7,
+          "n_days": 45,
+          "logloss": 1.457
+        },
+        "NZWN": {
+          "sigma": 0.6,
+          "obs_gap": 0.4,
+          "n_days": 46,
+          "logloss": 0.894
+        },
+        "OEJN": {
+          "sigma": 0.4,
+          "obs_gap": 0.2,
+          "n_days": 41,
+          "logloss": 0.968
+        },
+        "OPKC": {
+          "sigma": 0.4,
+          "obs_gap": 0.7,
+          "n_days": 46,
+          "logloss": 1.004
+        },
+        "RCSS": {
+          "sigma": 0.7,
+          "obs_gap": 0.4,
+          "n_days": 45,
+          "logloss": 1.213
+        },
+        "RJTT": {
+          "sigma": 0.8,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 1.254
+        },
+        "RKPK": {
+          "sigma": 0.4,
+          "obs_gap": 1.0,
+          "n_days": 46,
+          "logloss": 1.18
+        },
+        "RKSI": {
+          "sigma": 0.8,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 1.253
+        },
+        "RPLL": {
+          "sigma": 0.8,
+          "obs_gap": 0.4,
+          "n_days": 45,
+          "logloss": 1.166
+        },
+        "SAEZ": {
+          "sigma": 0.5,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 1.061
+        },
+        "SBGR": {
+          "sigma": 0.9,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 1.373
+        },
+        "UUWW": {
+          "sigma": 0.7,
+          "obs_gap": 0.4,
+          "n_days": 45,
+          "logloss": 1.042
+        },
+        "VILK": {
+          "sigma": 0.6,
+          "obs_gap": 0.4,
+          "n_days": 45,
+          "logloss": 1.096
+        },
+        "WMKK": {
+          "sigma": 0.5,
+          "obs_gap": 0.7,
+          "n_days": 46,
+          "logloss": 1.012
+        },
+        "WSSS": {
+          "sigma": 0.7,
+          "obs_gap": 0.7,
+          "n_days": 46,
+          "logloss": 1.207
+        },
+        "ZBAA": {
+          "sigma": 0.6,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 1.191
+        },
+        "ZGGG": {
+          "sigma": 1.0,
+          "obs_gap": 0.4,
+          "n_days": 46,
+          "logloss": 1.39
+        },
+        "ZGSZ": {
+          "sigma": 0.7,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 1.459
+        },
+        "ZHHH": {
+          "sigma": 0.6,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 1.209
+        },
+        "ZSPD": {
+          "sigma": 0.4,
+          "obs_gap": 0.4,
+          "n_days": 46,
+          "logloss": 0.863
+        },
+        "ZSQD": {
+          "sigma": 0.4,
+          "obs_gap": 0.4,
+          "n_days": 44,
+          "logloss": 1.039
+        },
+        "ZUCK": {
+          "sigma": 0.7,
+          "obs_gap": 0.2,
+          "n_days": 45,
+          "logloss": 1.215
+        },
+        "ZUUU": {
+          "sigma": 1.1,
+          "obs_gap": 0.4,
+          "n_days": 43,
+          "logloss": 1.457
+        }
+      }
+    },
+    "120": {
+      "default_c": {
+        "sigma": 0.7,
+        "obs_gap": 0.4,
+        "n_days": 0,
+        "logloss": null
+      },
+      "stations": {
+        "CYYZ": {
+          "sigma": 0.6,
+          "obs_gap": 0.4,
+          "n_days": 46,
+          "logloss": 1.229
+        },
+        "EDDM": {
+          "sigma": 0.7,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 1.165
+        },
+        "EFHK": {
+          "sigma": 0.6,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 1.085
+        },
+        "EGLC": {
+          "sigma": 0.4,
+          "obs_gap": 0.4,
+          "n_days": 46,
+          "logloss": 1.001
+        },
+        "EHAM": {
+          "sigma": 0.5,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 1.028
+        },
+        "EPWA": {
+          "sigma": 0.4,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 0.899
+        },
+        "FACT": {
+          "sigma": 0.8,
+          "obs_gap": 1.0,
+          "n_days": 45,
+          "logloss": 1.583
+        },
+        "KATL": {
+          "sigma": 1.08,
+          "obs_gap": 1.8,
+          "n_days": 46,
+          "logloss": 1.05
+        },
+        "KAUS": {
+          "sigma": 1.62,
+          "obs_gap": 1.8,
+          "n_days": 46,
+          "logloss": 1.344
+        },
+        "KBKF": {
+          "sigma": 1.98,
+          "obs_gap": 1.8,
+          "n_days": 46,
+          "logloss": 1.494
+        },
+        "KDAL": {
+          "sigma": 1.26,
+          "obs_gap": 1.8,
+          "n_days": 46,
+          "logloss": 1.098
+        },
+        "KHOU": {
+          "sigma": 0.9,
+          "obs_gap": 1.8,
+          "n_days": 46,
+          "logloss": 1.263
+        },
+        "KLAX": {
+          "sigma": 1.26,
+          "obs_gap": 1.8,
+          "n_days": 46,
+          "logloss": 1.485
+        },
+        "KLGA": {
+          "sigma": 0.9,
+          "obs_gap": 0.36,
+          "n_days": 46,
+          "logloss": 1.093
+        },
+        "KMIA": {
+          "sigma": 1.08,
+          "obs_gap": 1.26,
+          "n_days": 46,
+          "logloss": 1.195
+        },
+        "KORD": {
+          "sigma": 1.08,
+          "obs_gap": 1.8,
+          "n_days": 46,
+          "logloss": 1.289
+        },
+        "KSEA": {
+          "sigma": 0.9,
+          "obs_gap": 1.8,
+          "n_days": 46,
+          "logloss": 1.04
+        },
+        "KSFO": {
+          "sigma": 1.44,
+          "obs_gap": 1.8,
+          "n_days": 44,
+          "logloss": 1.36
+        },
+        "LEMD": {
+          "sigma": 0.4,
+          "obs_gap": 0.4,
+          "n_days": 46,
+          "logloss": 0.907
+        },
+        "LFPB": {
+          "sigma": 0.5,
+          "obs_gap": 1.0,
+          "n_days": 46,
+          "logloss": 1.125
+        },
+        "LIMC": {
+          "sigma": 0.8,
+          "obs_gap": 1.0,
+          "n_days": 46,
+          "logloss": 1.253
+        },
+        "LLBG": {
+          "sigma": 0.8,
+          "obs_gap": 0.7,
+          "n_days": 45,
+          "logloss": 1.333
+        },
+        "LTAC": {
+          "sigma": 0.6,
+          "obs_gap": 1.0,
+          "n_days": 46,
+          "logloss": 1.116
+        },
+        "LTFM": {
+          "sigma": 0.6,
+          "obs_gap": 0.4,
+          "n_days": 46,
+          "logloss": 1.167
+        },
+        "MMMX": {
+          "sigma": 0.5,
+          "obs_gap": 1.0,
+          "n_days": 46,
+          "logloss": 1.265
+        },
+        "MPMG": {
+          "sigma": 0.8,
+          "obs_gap": 1.0,
+          "n_days": 45,
+          "logloss": 1.656
+        },
+        "NZWN": {
+          "sigma": 0.7,
+          "obs_gap": 0.4,
+          "n_days": 46,
+          "logloss": 1.041
+        },
+        "OEJN": {
+          "sigma": 0.6,
+          "obs_gap": 0.7,
+          "n_days": 41,
+          "logloss": 1.206
+        },
+        "OPKC": {
+          "sigma": 0.5,
+          "obs_gap": 1.0,
+          "n_days": 46,
+          "logloss": 1.173
+        },
+        "RCSS": {
+          "sigma": 0.7,
+          "obs_gap": 0.4,
+          "n_days": 45,
+          "logloss": 1.327
+        },
+        "RJTT": {
+          "sigma": 1.0,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 1.459
+        },
+        "RKPK": {
+          "sigma": 0.8,
+          "obs_gap": 1.0,
+          "n_days": 46,
+          "logloss": 1.332
+        },
+        "RKSI": {
+          "sigma": 0.9,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 1.415
+        },
+        "RPLL": {
+          "sigma": 0.8,
+          "obs_gap": 1.0,
+          "n_days": 45,
+          "logloss": 1.298
+        },
+        "SAEZ": {
+          "sigma": 0.7,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 1.289
+        },
+        "SBGR": {
+          "sigma": 1.0,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 1.53
+        },
+        "UUWW": {
+          "sigma": 0.7,
+          "obs_gap": 0.2,
+          "n_days": 45,
+          "logloss": 1.104
+        },
+        "VILK": {
+          "sigma": 0.7,
+          "obs_gap": 1.0,
+          "n_days": 45,
+          "logloss": 1.203
+        },
+        "WMKK": {
+          "sigma": 0.6,
+          "obs_gap": 0.7,
+          "n_days": 46,
+          "logloss": 1.229
+        },
+        "WSSS": {
+          "sigma": 0.7,
+          "obs_gap": 1.0,
+          "n_days": 46,
+          "logloss": 1.147
+        },
+        "ZBAA": {
+          "sigma": 0.7,
+          "obs_gap": 0.4,
+          "n_days": 46,
+          "logloss": 1.355
+        },
+        "ZGGG": {
+          "sigma": 0.9,
+          "obs_gap": 0.7,
+          "n_days": 46,
+          "logloss": 1.445
+        },
+        "ZGSZ": {
+          "sigma": 0.8,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 1.625
+        },
+        "ZHHH": {
+          "sigma": 0.5,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 1.255
+        },
+        "ZSPD": {
+          "sigma": 0.4,
+          "obs_gap": 0.2,
+          "n_days": 46,
+          "logloss": 0.983
+        },
+        "ZSQD": {
+          "sigma": 0.5,
+          "obs_gap": 0.4,
+          "n_days": 44,
+          "logloss": 1.13
+        },
+        "ZUCK": {
+          "sigma": 0.6,
+          "obs_gap": 0.2,
+          "n_days": 45,
+          "logloss": 1.276
+        },
+        "ZUUU": {
+          "sigma": 0.9,
+          "obs_gap": 0.2,
+          "n_days": 43,
+          "logloss": 1.562
+        }
+      }
+    }
+  }
+}

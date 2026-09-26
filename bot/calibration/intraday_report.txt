@@ -1,30 +1,39 @@
-WeatherBotMark3 intraday backtest — 2026-09-26 19:01 UTC
+WeatherBotMark3 intraday backtest — 2026-09-26 21:25 UTC
 Test days 2026-08-26 → 2026-09-24. Decision time = each city's typical peak (peak_times.py) minus the offset, local.
 Bot sees: airport readings up to the decision, 24-h-ahead model forecasts, calibration from earlier days.
 LOWER log loss = better.
 
 === 120 minutes before typical peak ===
-  Bot (readings + models)            days=1436  log loss=1.306  Brier=0.679
+  Bot before (generic uncertainty)   days=1436  log loss=1.306  Brier=0.679
+  Bot, calibrated intraday           days=1436  log loss=1.253  Brier=0.663
   Polymarket price                   days=1436  log loss=1.059  Brier=0.574
-  Blend: 25% ours + market           days=1436  log loss=1.053  Brier=0.575
-  Blend: 50% ours + market           days=1436  log loss=1.095  Brier=0.595
+  Blend: 25% ours + market           days=1436  log loss=1.051  Brier=0.573
+  Blend: 50% ours + market           days=1436  log loss=1.079  Brier=0.586
   Edge test: YES — adding the bot's view improves on the market's price.
+  All-city intraday uncertainty: spread 0.7°C, settled-above-reports allowance 0.4°C
 
-  Paper trades — live bot rules:
-    trades=1060  won=169  P&L=$-1090.56  ROI=-10.3%   90% range -25% … +6%
-      long shots  <10¢  trades= 449  won= 19  P&L=$ -756.28  ROI=-17%
-      10–30¢            trades= 443  won= 80  P&L=$ -364.79  ROI=-8%
-      30–60¢            trades= 157  won= 65  P&L=$  +67.25  ROI=+4%
-      favourites >60¢   trades=  11  won=  5  P&L=$  -36.74  ROI=-33%
+  Paper trades — old live rules (bot alone, edge ≥ 8%):
+    trades=1093  won=170  P&L=$-1101.35  ROI=-10.1%   90% range -25% … +5%
+      long shots  <10¢  trades= 492  won= 22  P&L=$-1014.43  ROI=-21%
+      10–30¢            trades= 473  won= 90  P&L=$ -307.02  ROI=-6%
+      30–60¢            trades= 122  won= 55  P&L=$ +238.85  ROI=+20%
+      favourites >60¢   trades=   6  won=  3  P&L=$  -18.74  ROI=-31%
 
-  Paper trades — blend rules:
-    trades=1085  won=248  P&L=$+779.96  ROI=+7.2%   90% range -7% … +22%
-      long shots  <10¢  trades= 254  won= 17  P&L=$ +375.23  ROI=+15%
-      10–30¢            trades= 577  won=114  P&L=$ +137.22  ROI=+2%
-      30–60¢            trades= 231  won=103  P&L=$ +294.92  ROI=+13%
-      favourites >60¢   trades=  23  won= 14  P&L=$  -27.41  ROI=-12%
+  Paper trades — blend 25% ours, edge ≥ 4%:
+    trades=440  won=124  P&L=$+685.06  ROI=+15.6%   90% range -2% … +34%
+      long shots  <10¢  trades=  47  won=  6  P&L=$ +253.60  ROI=+54%
+      10–30¢            trades= 265  won= 56  P&L=$ +163.16  ROI=+6%
+      30–60¢            trades= 121  won= 57  P&L=$ +266.31  ROI=+22%
+      favourites >60¢   trades=   7  won=  5  P&L=$   +1.99  ROI=+3%
 
-  Reliability — bot:
+  Paper trades — blend 50% ours, edge ≥ 4%:
+    trades=1060  won=227  P&L=$+752.59  ROI=+7.1%   90% range -6% … +22%
+      long shots  <10¢  trades= 278  won= 20  P&L=$ +356.69  ROI=+13%
+      10–30¢            trades= 578  won=115  P&L=$  +69.65  ROI=+1%
+      30–60¢            trades= 196  won= 88  P&L=$ +348.86  ROI=+18%
+      favourites >60¢   trades=   8  won=  4  P&L=$  -22.61  ROI=-28%
+
+  Reliability — bot before:
          we said   happened   count
             0–5%       0.6%   10696   (avg said 0.3%)
            5–15%      10.7%    1411   (avg said 9.6%)
@@ -33,6 +42,15 @@ LOWER log loss = better.
           50–70%      49.7%     431   (avg said 57.4%)
           70–90%      50.7%      69   (avg said 76.9%)
          90–100%      95.5%      22   (avg said 97.1%)
+  Reliability — bot calibrated:
+         we said   happened   count
+            0–5%       0.3%   10347   (avg said 0.4%)
+           5–15%       9.2%    1639   (avg said 9.5%)
+          15–30%      22.5%    1826   (avg said 22.4%)
+          30–50%      39.2%    1646   (avg said 38.6%)
+          50–70%      57.0%     309   (avg said 55.6%)
+          70–90%      52.6%      19   (avg said 79.3%)
+         90–100%     100.0%      10   (avg said 97.4%)
   Reliability — market:
          we said   happened   count
             0–5%       0.3%   11058   (avg said 0.6%)
@@ -44,27 +62,36 @@ LOWER log loss = better.
          90–100%      96.6%      29   (avg said 95.2%)
 
 === 60 minutes before typical peak ===
-  Bot (readings + models)            days=1436  log loss=1.176  Brier=0.627
+  Bot before (generic uncertainty)   days=1436  log loss=1.176  Brier=0.627
+  Bot, calibrated intraday           days=1436  log loss=1.133  Brier=0.620
   Polymarket price                   days=1436  log loss=0.990  Brier=0.545
-  Blend: 25% ours + market           days=1436  log loss=0.968  Brier=0.540
-  Blend: 50% ours + market           days=1436  log loss=0.999  Brier=0.556
+  Blend: 25% ours + market           days=1436  log loss=0.967  Brier=0.539
+  Blend: 50% ours + market           days=1436  log loss=0.987  Brier=0.550
   Edge test: YES — adding the bot's view improves on the market's price.
+  All-city intraday uncertainty: spread 0.7°C, settled-above-reports allowance 0.4°C
 
-  Paper trades — live bot rules:
-    trades=1016  won=241  P&L=$+619.37  ROI=+6.1%   90% range -8% … +22%
-      long shots  <10¢  trades= 346  won= 17  P&L=$ -537.67  ROI=-16%
-      10–30¢            trades= 381  won= 84  P&L=$ +909.26  ROI=+24%
-      30–60¢            trades= 249  won=112  P&L=$ +254.25  ROI=+10%
-      favourites >60¢   trades=  40  won= 28  P&L=$   -6.48  ROI=-2%
+  Paper trades — old live rules (bot alone, edge ≥ 8%):
+    trades=1065  won=224  P&L=$+1553.29  ROI=+14.6%   90% range -2% … +32%
+      long shots  <10¢  trades= 396  won= 23  P&L=$ +380.44  ROI=+10%
+      10–30¢            trades= 419  won= 92  P&L=$+1010.83  ROI=+24%
+      30–60¢            trades= 238  won=101  P&L=$ +170.19  ROI=+7%
+      favourites >60¢   trades=  12  won=  8  P&L=$   -8.18  ROI=-7%
 
-  Paper trades — blend rules:
-    trades=1138  won=325  P&L=$+2357.22  ROI=+20.7%   90% range +7% … +35%
-      long shots  <10¢  trades= 228  won= 19  P&L=$ +826.00  ROI=+36%
-      10–30¢            trades= 509  won=115  P&L=$+1275.77  ROI=+25%
-      30–60¢            trades= 347  won=151  P&L=$ +223.43  ROI=+6%
-      favourites >60¢   trades=  54  won= 40  P&L=$  +32.01  ROI=+6%
+  Paper trades — blend 25% ours, edge ≥ 4%:
+    trades=576  won=190  P&L=$+1236.35  ROI=+21.5%   90% range +7% … +37%
+      long shots  <10¢  trades=  49  won=  4  P&L=$  +40.16  ROI=+8%
+      10–30¢            trades= 278  won= 70  P&L=$ +926.03  ROI=+33%
+      30–60¢            trades= 232  won=104  P&L=$ +270.44  ROI=+12%
+      favourites >60¢   trades=  17  won= 12  P&L=$   -0.28  ROI=-0%
 
-  Reliability — bot:
+  Paper trades — blend 50% ours, edge ≥ 4%:
+    trades=1081  won=294  P&L=$+2598.83  ROI=+24.0%   90% range +10% … +40%
+      long shots  <10¢  trades= 227  won= 18  P&L=$ +695.89  ROI=+31%
+      10–30¢            trades= 511  won=120  P&L=$+1591.47  ROI=+31%
+      30–60¢            trades= 325  won=141  P&L=$ +274.54  ROI=+8%
+      favourites >60¢   trades=  18  won= 15  P&L=$  +36.93  ROI=+21%
+
+  Reliability — bot before:
          we said   happened   count
             0–5%       0.5%   11269   (avg said 0.2%)
            5–15%      10.9%    1092   (avg said 9.7%)
@@ -73,6 +100,15 @@ LOWER log loss = better.
           50–70%      52.6%     555   (avg said 57.9%)
           70–90%      60.0%     140   (avg said 77.5%)
          90–100%      90.9%      44   (avg said 96.2%)
+  Reliability — bot calibrated:
+         we said   happened   count
+            0–5%       0.3%   10969   (avg said 0.3%)
+           5–15%       9.7%    1227   (avg said 9.7%)
+          15–30%      21.4%    1527   (avg said 22.1%)
+          30–50%      41.5%    1391   (avg said 39.0%)
+          50–70%      53.2%     615   (avg said 57.1%)
+          70–90%      79.6%      54   (avg said 76.3%)
+         90–100%      92.3%      13   (avg said 98.1%)
   Reliability — market:
          we said   happened   count
             0–5%       0.3%   11322   (avg said 0.5%)
@@ -83,56 +119,56 @@ LOWER log loss = better.
           70–90%      75.9%     162   (avg said 77.0%)
          90–100%     100.0%      39   (avg said 96.1%)
 
-Per city at 60 min before peak (ours / market / blend; ✓ = blend beats market):
-City             n    ours  market   blend
-Paris           30   0.904   1.103   0.886  ✓
-Atlanta         30   0.901   1.120   0.917  ✓
-Jeddah          30   0.909   1.056   0.924  ✓
-Denver          30   1.431   1.459   1.336  ✓
-Kuala Lumpur    30   1.033   1.095   0.991  ✓
-Toronto         30   1.120   1.110   1.013  ✓
-Shenzhen        30   1.186   1.282   1.195  ✓
-Warsaw          30   0.794   0.810   0.729  ✓
-Karachi         30   1.209   1.209   1.138  ✓
-Buenos Aires    30   1.109   1.110   1.048  ✓
-Wuhan           30   1.093   1.096   1.034  ✓
-Lucknow         30   0.947   0.914   0.858  ✓
-Moscow          30   1.051   1.008   0.953  ✓
-Qingdao         30   1.060   1.028   0.980  ✓
-Istanbul        30   0.825   0.838   0.793  ✓
-Panama City     27   1.097   1.018   0.976  ✓
-Manila          30   1.221   1.212   1.172  ✓
-Shanghai        30   0.830   0.781   0.741  ✓
-Miami           30   1.057   0.976   0.938  ✓
-Wellington      30   0.835   0.725   0.691  ✓
-Amsterdam       30   1.135   0.970   0.944  ✓
-Mexico City     30   1.152   1.071   1.046  ✓
-Cape Town       30   1.364   1.252   1.228  ✓
-Taipei          30   1.179   1.084   1.073  ✓
-Beijing         30   1.254   1.127   1.127  
-Munich          30   0.891   0.735   0.736  
-London          30   0.876   0.731   0.734  
-San Francisco   30   1.205   1.042   1.047  
-Chicago         30   1.216   1.035   1.044  
-Madrid          30   0.936   0.789   0.800  
-São Paulo       30   1.416   1.187   1.221  
-Chongqing       30   1.201   0.935   0.973  
-New York City   30   1.161   0.940   0.986  
-Tokyo           30   1.124   0.906   0.963  
-Busan           30   1.208   0.982   1.041  
-Los Angeles     30   1.391   1.064   1.126  
-Seoul           30   1.301   1.007   1.080  
-Guangzhou       30   1.632   1.336   1.419  
-Seattle         30   0.966   0.669   0.774  
-Chengdu         30   1.545   1.175   1.281  
-Helsinki        30   1.154   0.753   0.865  
-Dallas          30   1.220   0.776   0.903  
-Ankara          30   1.264   0.821   0.963  
-Houston         30   1.496   0.964   1.119  
-Austin          30   1.551   0.986   1.149  
-Singapore       30   1.601   0.941   1.145  
-Milan           30   1.522   0.682   0.917  
-Tel Aviv        29   1.866   0.584   0.931  
+Per city at 60 min before peak (✓ = a blend beats the market; spread/allow = learned values):
+City             n    ours  market    bl25    bl50  spread  allow
+Paris           30   0.965   1.103   0.948   0.908    0.30   0.70  ✓
+Atlanta         30   0.979   1.120   1.028   0.976    1.08   1.26  ✓
+Denver          30   1.378   1.459   1.353   1.317    1.62   0.36  ✓
+Jeddah          30   0.941   1.056   0.971   0.940    0.50   0.20  ✓
+Karachi         30   1.126   1.209   1.137   1.106    0.40   1.00  ✓
+Kuala Lumpur    30   1.061   1.095   1.019   0.997    0.50   0.70  ✓
+Shenzhen        30   1.189   1.282   1.226   1.194    0.70   0.20  ✓
+Toronto         30   1.187   1.110   1.048   1.053    0.60   0.20  ✓
+Shanghai        30   0.786   0.781   0.732   0.719    0.40   0.40  ✓
+Qingdao         30   1.040   1.028   0.976   0.970    0.40   0.40  ✓
+Warsaw          30   0.847   0.810   0.759   0.756    0.40   0.20  ✓
+Miami           30   1.005   0.976   0.923   0.923    1.08   0.36  ✓
+Panama City     27   1.071   1.018   0.970   0.975    0.80   0.70  ✓
+Moscow          30   1.048   1.008   0.970   0.961    0.70   0.40  ✓
+Buenos Aires    30   1.139   1.110   1.067   1.063    0.60   0.20  ✓
+Manila          30   1.213   1.212   1.179   1.171    0.80   0.40  ✓
+Mexico City     30   1.114   1.071   1.039   1.036    0.50   0.70  ✓
+Amsterdam       30   1.081   0.970   0.936   0.946    0.50   0.20  ✓
+Wuhan           30   1.163   1.096   1.063   1.065    0.60   0.20  ✓
+London          30   0.972   0.731   0.700   0.738    0.50   0.20  ✓
+Madrid          30   0.840   0.789   0.758   0.759    0.50   0.20  ✓
+Istanbul        30   0.867   0.838   0.816   0.815    0.40   0.20  ✓
+Cape Town       30   1.383   1.252   1.229   1.243    0.60   0.40  ✓
+Chicago         30   1.218   1.035   1.013   1.046    0.90   1.26  ✓
+Taipei          30   1.182   1.084   1.066   1.077    0.70   0.40  ✓
+Busan           30   1.096   0.982   0.968   0.983    0.50   1.00  ✓
+Lucknow         30   0.990   0.914   0.900   0.912    0.60   0.40  ✓
+San Francisco   30   1.170   1.042   1.029   1.047    1.44   1.26  ✓
+Dallas          30   0.874   0.776   0.765   0.778    1.26   1.80  ✓
+New York City   30   1.073   0.940   0.930   0.950    1.08   0.36  ✓
+Wellington      30   0.876   0.725   0.715   0.733    0.60   0.40  ✓
+Beijing         30   1.308   1.127   1.117   1.152    0.60   0.20  ✓
+Munich          30   0.947   0.735   0.731   0.755    0.70   0.40  
+Guangzhou       30   1.519   1.336   1.333   1.375    1.00   0.40  
+Chongqing       30   1.295   0.935   0.937   1.000    0.70   0.20  
+Los Angeles     30   1.345   1.064   1.067   1.106    1.44   1.80  
+São Paulo       30   1.446   1.187   1.192   1.233    0.90   0.20  
+Austin          30   1.200   0.986   0.996   1.035    1.44   1.80  
+Helsinki        30   1.043   0.753   0.766   0.827    0.60   0.20  
+Seoul           30   1.302   1.007   1.025   1.080    0.80   0.20  
+Tokyo           30   1.164   0.906   0.929   0.978    0.80   0.20  
+Chengdu         30   1.509   1.175   1.200   1.261    1.10   0.40  
+Ankara          30   1.107   0.821   0.849   0.903    0.60   0.70  
+Tel Aviv        29   1.241   0.584   0.616   0.710    0.70   0.20  
+Milan           30   1.179   0.682   0.719   0.811    0.90   0.70  
+Seattle         30   1.035   0.669   0.709   0.785    1.08   1.26  
+Singapore       30   1.457   0.941   0.983   1.086    0.70   0.70  
+Houston         30   1.389   0.964   1.007   1.101    0.90   1.26  
 
 Caveats: prices are last TRADED prices (the ask is higher); archive readings are hourly for
 many stations (can miss a half-hourly peak); forecasts are 24 h old (the live bot has fresher ones).
