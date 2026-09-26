@@ -1,0 +1,36 @@
+{
+  "meta": {
+    "generated": "2026-09-26T16:55:18.915162+00:00",
+    "period": "2026-07-27..2026-09-24",
+    "lead": "previous_day1"
+  },
+  "stations": {
+    "EGLC": {
+      "bias": {
+        "ecmwf_ifs025": 0.51,
+        "gem_seamless": 0.17,
+        "gfs_seamless": -0.26,
+        "icon_seamless": 0.34,
+        "jma_seamless": 1.28,
+        "ukmo_seamless": 0.17
+      },
+      "sigma": 0.765,
+      "n_days": 59,
+      "fitted_through": "2026-09-24"
+    },
+    "KLGA": {
+      "bias": {
+        "ecmwf_ifs025": 0.17,
+        "gem_seamless": -0.39,
+        "gfs_hrrr": -0.73,
+        "gfs_seamless": -0.73,
+        "icon_seamless": -0.34,
+        "jma_seamless": 0.86,
+        "ukmo_seamless": -1.03
+      },
+      "sigma": 1.371,
+      "n_days": 60,
+      "fitted_through": "2026-09-24"
+    }
+  }
+}

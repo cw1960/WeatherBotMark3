@@ -12,7 +12,7 @@ Across models we report the consensus (median projected high) and the spread
 Models:
   * Global, for every city: ECMWF IFS 0.25°, ECMWF AIFS (AI model), DWD ICON (seamless:
     uses ICON-D2/EU at high resolution where available), NOAA GFS, Canada GEM,
-    Japan JMA, UK Met Office, Korea KMA, China CMA.
+    Japan JMA, UK Met Office, Korea KMA.
   * US only: NOAA HRRR (3 km, hourly updates) — the sharpest short-range US model.
 Any model name Open-Meteo rejects is dropped automatically (logged once), so a renamed
 or retired model can't take the whole feed down.
@@ -39,8 +39,8 @@ log = structlog.get_logger(__name__)
 
 GLOBAL_MODELS: tuple[str, ...] = (
     "ecmwf_ifs025", "ecmwf_aifs025", "icon_seamless", "gfs_seamless",
-    "gem_seamless", "jma_seamless", "ukmo_seamless", "kma_seamless", "cma_grapes",
-)
+    "gem_seamless", "jma_seamless", "ukmo_seamless", "kma_seamless",
+)   # cma_grapes removed: Open-Meteo rejects the name (forecast + previous-runs APIs, 2026-09-26)
 US_ONLY_MODELS: tuple[str, ...] = ("gfs_hrrr",)
 PRIMARY_US, PRIMARY_GLOBAL = "gfs_hrrr", "ecmwf_ifs025"
 BATCH = 10  # locations per request
