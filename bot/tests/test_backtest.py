@@ -57,36 +57,39 @@ def test_local_day_maxima_uses_station_day_and_needs_coverage():
 
 
 # ------------------------------------------------------------------ synthetic end-to-end
-async def test_backtest_end_to_end_learns_station_offset(tmp_path, monkeypatch, capsys):
+async def _run_world(tmp_path, monkeypatch, argv, clob_price=None):
+    """London world: models forecast `model_high`; the station settles at model_high + 1.5 ± 0.6.
+    clob_price(day, bucket_label, won) → price at local midnight (for --prices)."""
     st = to_station(BY_SLUG["london"])
     tz = ZoneInfo(st.timezone)
     rng = random.Random(7)
     today = datetime.now(timezone.utc).date()
     days = [today - timedelta(days=2 + i) for i in range(45)]
-    model_high = {d: 18.0 + 4 * ((d.toordinal() % 7) / 7) for d in days}         # varies by day
-    truth = {d: round(model_high[d] + 1.5 + rng.gauss(0, 0.6)) for d in days}    # station runs +1.5
+    model_high = {d: 18.0 + 4 * ((d.toordinal() % 7) / 7) for d in days}
+    truth = {d: round(model_high[d] + 1.5 + rng.gauss(0, 0.6)) for d in days}
+    labels = [("14°C or below", None, 14)] + [(f"{t}°C", t, t) for t in range(15, 28)] + [("28°C or higher", 28, None)]
+    token_info = {}
 
     def gamma(req):
         slug = req.url.params["slug"]
         d = next((d for d in days if bt.event_slug("london", d) == slug), None)
         if d is None:
             return httpx.Response(200, json=[])
-        labels = [("14°C or below", None, 14)] + [(f"{t}°C", t, t) for t in range(15, 28)] + [("28°C or higher", 28, None)]
         markets = []
         for i, (lab, lo, hi) in enumerate(labels):
             won = (lo is None or truth[d] >= lo) and (hi is None or truth[d] <= hi)
+            token_info[f"{slug}y{i}"] = (d, lab, won)
             markets.append({"id": i, "conditionId": f"{slug}{i}", "groupItemTitle": lab,
                             "clobTokenIds": json.dumps([f"{slug}y{i}", f"{slug}n{i}"]),
                             "outcomePrices": json.dumps(["1", "0"] if won else ["0", "1"])})
         return httpx.Response(200, json=[{"id": slug, "slug": slug, "closed": True, "markets": markets}])
 
     def meteo(req):
-        s = date.fromisoformat(req.url.params["start_date"])
-        e = date.fromisoformat(req.url.params["end_date"])
-        t0 = datetime.combine(s, time.min, tzinfo=timezone.utc)
+        s0 = date.fromisoformat(req.url.params["start_date"])
+        e0 = date.fromisoformat(req.url.params["end_date"])
+        t = datetime.combine(s0, time.min, tzinfo=timezone.utc)
         times, temps = [], []
-        t = t0
-        while t < datetime.combine(e + timedelta(days=1), time.min, tzinfo=timezone.utc):
+        while t < datetime.combine(e0 + timedelta(days=1), time.min, tzinfo=timezone.utc):
             ld = t.astimezone(tz).date()
             peak = model_high.get(ld, 15.0)
             temps.append(peak if t.astimezone(tz).hour == 14 else peak - 5)
@@ -94,27 +97,58 @@ async def test_backtest_end_to_end_learns_station_offset(tmp_path, monkeypatch, 
             t += timedelta(hours=1)
         return httpx.Response(200, json={"hourly": {"time": times, "temperature_2m_previous_day1": temps}})
 
+    def clob(req):
+        d, lab, won = token_info[req.url.params["market"]]
+        end_ts = int(req.url.params["endTs"])
+        return httpx.Response(200, json={"history": [{"t": end_ts - 60, "p": clob_price(d, lab, won)}]})
+
     def router(req):
-        return gamma(req) if "gamma-api" in str(req.url) else meteo(req)
+        u = str(req.url)
+        return gamma(req) if "gamma-api" in u else clob(req) if "prices-history" in u else meteo(req)
 
     real_client = httpx.AsyncClient
     monkeypatch.setattr(bt.httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(router), **kw))
     monkeypatch.setattr(bt, "CACHE", tmp_path / "cache")
     monkeypatch.setattr(bt, "REPORT", tmp_path / "report.txt")
-    cal_path = tmp_path / "cal.json"
-    monkeypatch.setattr(calmod, "CAL_PATH", cal_path)
+    monkeypatch.setattr(calmod, "CAL_PATH", tmp_path / "cal.json")
     monkeypatch.setattr(bt, "GLOBAL_MODELS", ("ecmwf_ifs025", "icon_seamless"))
-    monkeypatch.setattr(sys, "argv", ["backtest.py", "london", "--days", "45"])
-
+    monkeypatch.setattr(sys, "argv", ["backtest.py", "london", "--days", "45"] + argv)
     assert await bt.main() == 0
-    out = capsys.readouterr().out
-    saved = calmod.load(cal_path)["EGLC"]
+    return (tmp_path / "report.txt").read_text()
+
+
+async def test_backtest_end_to_end_learns_station_offset(tmp_path, monkeypatch):
+    report = await _run_world(tmp_path, monkeypatch, [])
+    saved = calmod.load(tmp_path / "cal.json")["EGLC"]
     assert 1.1 < saved.bias["ecmwf_ifs025"] < 1.9 and saved.n_days >= 40
-    # calibrated must beat generic on this station
-    gen = float(out.split("Generic settings (today's bot)")[1].split("log loss=")[1].split()[0])
-    cal = float(out.split("Station-calibrated")[1].split("log loss=")[1].split()[0])
+    gen = float(report.split("Generic settings (today's bot)")[1].split("log loss=")[1].split()[0])
+    cal = float(report.split("Station-calibrated")[1].split("log loss=")[1].split()[0])
     assert cal < gen
-    assert (tmp_path / "report.txt").exists()
+
+
+async def test_edge_test_says_yes_against_an_uninformed_market(tmp_path, monkeypatch):
+    report = await _run_world(tmp_path, monkeypatch, ["--prices"], clob_price=lambda d, lab, won: 1 / 15)
+    assert "Edge test" in report and "YES" in report
+    assert "Paper trades — live bot rules" in report
+
+
+async def test_edge_test_says_no_against_a_market_that_already_knows(tmp_path, monkeypatch):
+    report = await _run_world(tmp_path, monkeypatch, ["--prices"],
+                              clob_price=lambda d, lab, won: 0.97 if won else 0.002)
+    assert "Edge test" in report and "NO —" in report
+
+
+def test_blend_and_trade_rules():
+    ours = {"a": 0.6, "b": 0.3, "c": 0.1}
+    mkt = {"a": 0.2, "b": 0.5, "c": 0.3}
+    b = bt.blend(ours, mkt, 0.5)
+    assert abs(sum(b.values()) - 1) < 1e-9 and mkt["a"] < b["a"] < ours["a"]
+    # live rules: edge window 8–30%, P ≥ 10%, one pick
+    assert bt.pick_trade({"a": 0.45, "b": 0.12}, {"a": 0.30, "b": 0.02}) == (0.15000000000000002, "a", 0.30, 0.45)
+    assert bt.pick_trade({"a": 0.90}, {"a": 0.20}) is None          # 70-point gap: implausible
+    assert bt.pick_trade({"a": 0.09}, {"a": 0.001}) is None         # far tail
+    lo, hi = bt.bootstrap_roi([bt.trade_pnl(0.5, True), bt.trade_pnl(0.5, False)] * 20)
+    assert lo < 0 < hi
 
 
 async def test_price_at_takes_last_price_before_decision(tmp_path, monkeypatch):

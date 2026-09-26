@@ -45,6 +45,7 @@ from weatherbot.catalog import CATALOG, to_station
 from weatherbot.exchange.markets import Bucket, _json_list, event_slug, parse_bucket
 from weatherbot.models import Station
 from weatherbot.probability import bucket_probabilities, distribution
+from weatherbot.strategy import MAX_PLAUSIBLE_EDGE, MIN_PROB
 from weatherbot.settings import settings
 from weatherbot.weather.forecast import GLOBAL_MODELS, US_ONLY_MODELS
 
@@ -53,8 +54,9 @@ REPORT = Path(__file__).resolve().parent / "calibration" / "backtest_report.txt"
 GAMMA = "https://gamma-api.polymarket.com/events"
 CLOB_HISTORY = "https://clob.polymarket.com/prices-history"
 MIN_TRAIN_DAYS = 14
-EDGE_FOR_PAPER_TRADES = 0.08
+EDGE_FOR_PAPER_TRADES = 0.08   # the bot's default min_edge_pct
 PAPER_STAKE = 10.0
+BLEND_WEIGHTS = (0.25, 0.5)    # share of OUR probability in the ours × market blend
 
 
 # ----------------------------------------------------------------------------- cache
@@ -220,6 +222,59 @@ def predict(rec: DayRecord, cal: StationCal | None, unit: str, buckets: list[Buc
     return bucket_probabilities(dist, buckets)
 
 
+def blend(ours: dict[str, float], mkt: dict[str, float], w: float) -> dict[str, float]:
+    """Geometric blend p ∝ ours^w · market^(1−w). If this beats the market alone, our model
+    carries information the market doesn't — the real test of edge."""
+    out = {k: (max(ours.get(k, 0.0), 1e-4) ** w) * (max(mkt.get(k, 0.0), 1e-4) ** (1 - w))
+           for k in set(ours) | set(mkt)}
+    tot = sum(out.values())
+    return {k: v / tot for k, v in out.items()}
+
+
+def pick_trade(probs: dict[str, float], prices: dict[str, float], min_edge: float = EDGE_FOR_PAPER_TRADES):
+    """Exactly the live bot's rules (strategy.select_trade): at most one bucket per city-day,
+    P ≥ MIN_PROB, min_edge ≤ edge ≤ MAX_PLAUSIBLE_EDGE, largest edge wins."""
+    best = None
+    for label, price in prices.items():
+        if not (0.01 <= price <= 0.95):
+            continue
+        p = probs.get(label, 0.0)
+        edge = p - price
+        if p >= MIN_PROB and min_edge <= edge <= MAX_PLAUSIBLE_EDGE and (best is None or edge > best[0]):
+            best = (edge, label, price, p)
+    return best
+
+
+def trade_pnl(price: float, won: bool, stake: float = PAPER_STAKE) -> float:
+    return stake / price - stake if won else -stake
+
+
+def bootstrap_roi(pnls: list[float], stake: float = PAPER_STAKE, n: int = 2000, seed: int = 1) -> tuple[float, float]:
+    import random
+    rng = random.Random(seed)
+    k = len(pnls)
+    rois = sorted(sum(rng.choice(pnls) for _ in range(k)) / (stake * k) for _ in range(n))
+    return rois[int(0.05 * n)], rois[int(0.95 * n)]
+
+
+def paper_lines(title: str, trades: list[tuple[float, float, bool]]) -> list[str]:
+    """trades: (edge, price, won)."""
+    if not trades:
+        return ["", f"{title}: no trades met the rules."]
+    pnls = [trade_pnl(pr, won) for _, pr, won in trades]
+    lo, hi = bootstrap_roi(pnls)
+    out = ["", f"{title}:",
+           f"    trades={len(trades)}  won={sum(w for *_, w in trades)}  P&L=${sum(pnls):+.2f}  "
+           f"ROI={sum(pnls) / (PAPER_STAKE * len(trades)):+.1%}   90% range {lo:+.0%} … {hi:+.0%}"]
+    for lo_p, hi_p, name in [(0, .10, "long shots  <10¢"), (.10, .30, "10–30¢"), (.30, .60, "30–60¢"), (.60, 1.01, "favourites >60¢")]:
+        sel = [(pr, won) for _, pr, won in trades if lo_p <= pr < hi_p]
+        if sel:
+            pn = sum(trade_pnl(pr, won) for pr, won in sel)
+            out.append(f"      {name:<17} trades={len(sel):>4}  won={sum(w for _, w in sel):>3}  "
+                       f"P&L=${pn:+8.2f}  ROI={pn / (PAPER_STAKE * len(sel)):+.0%}")
+    return out
+
+
 class Score:
     def __init__(self, name: str) -> None:
         self.name, self.logloss, self.brier, self.pairs = name, [], [], []
@@ -255,6 +310,8 @@ async def main() -> int:
     ap.add_argument("cities", nargs="*")
     ap.add_argument("--days", type=int, default=60)
     ap.add_argument("--prices", action="store_true", help="compare with Polymarket prices at local midnight")
+    ap.add_argument("--price-days", type=int, default=0,
+                    help="with --prices: only the most recent N days (0 = all); fewer downloads")
     ap.add_argument("--no-save", action="store_true", help="don't write the calibration file")
     args = ap.parse_args()
 
@@ -295,10 +352,13 @@ async def main() -> int:
                   f"models with history={len(maxima)}  usable days={len(records[st.city_slug])}")
 
         # ------------------------------------------------ walk-forward scoring
-        generic, calibrated, market = Score("Generic settings (today's bot)"), Score("Station-calibrated"), Score("Polymarket price")
-        per_city = []
-        paper = []  # (edge, price, won)
+        generic, calibrated = Score("Generic settings (today's bot)"), Score("Station-calibrated")
+        market = Score("Polymarket price")
+        blends = {w: Score(f"Blend: {int(w*100)}% ours + market") for w in BLEND_WEIGHTS}
+        per_city: dict[str, dict] = {}
+        paper_model, paper_blend = [], []
         price_jobs = []
+        price_cutoff = end - timedelta(days=args.price_days - 1) if args.price_days else start
         for st in stations:
             recs = records[st.city_slug]
             g_city, c_city = Score(""), Score("")
@@ -311,24 +371,35 @@ async def main() -> int:
                 pc = predict(rec, cal, st.unit, buckets)
                 generic.add(pg, winner); calibrated.add(pc, winner)
                 g_city.add(pg, winner); c_city.add(pc, winner)
-                if args.prices:
+                if args.prices and rec.day >= price_cutoff:
                     ts = int(datetime.combine(rec.day, time.min, tzinfo=ZoneInfo(st.timezone)).timestamp())
                     price_jobs.append((st, rec, buckets, winner, pc, ts))
             if g_city.logloss:
-                per_city.append((st.city_label, len(g_city.logloss),
-                                 statistics.fmean(g_city.logloss), statistics.fmean(c_city.logloss)))
+                per_city[st.city_label] = {"n": len(g_city.logloss), "generic": statistics.fmean(g_city.logloss),
+                                           "cal": statistics.fmean(c_city.logloss), "mkt": Score(""), "bl": Score(""),
+                                           "ours_on_mkt_days": Score("")}
 
         if args.prices and price_jobs:
-            print(f"Fetching market prices for {len(price_jobs)} city-days …")
-            for st, rec, buckets, winner, pc, ts in price_jobs:
+            print(f"Fetching market prices for {len(price_jobs)} city-days (cached after the first run) …")
+            for j, (st, rec, buckets, winner, pc, ts) in enumerate(price_jobs, 1):
                 prices = await asyncio.gather(*(price_at(http, sem, b.token_yes, ts) for b in buckets))
                 pm = {b.label: p for b, p in zip(buckets, prices) if p is not None}
-                if len(pm) >= len(buckets) - 1 and sum(pm.values()) > 0:
-                    market.add(pm, winner)
-                    for b in buckets:
-                        pr = pm.get(b.label)
-                        if pr and 0.01 <= pr <= 0.95 and pc[b.label] - pr >= EDGE_FOR_PAPER_TRADES:
-                            paper.append((pc[b.label] - pr, pr, b.label == winner))
+                if len(pm) < len(buckets) - 1 or sum(pm.values()) <= 0:
+                    continue
+                tot = sum(pm.values())
+                mkt_probs = {k: v / tot for k, v in pm.items()}
+                market.add(mkt_probs, winner)
+                for w, sc in blends.items():
+                    sc.add(blend(pc, mkt_probs, w), winner)
+                c = per_city[st.city_label]
+                c["mkt"].add(mkt_probs, winner); c["ours_on_mkt_days"].add(pc, winner)
+                c["bl"].add(blend(pc, mkt_probs, 0.5), winner)
+                if (t := pick_trade(pc, pm)) is not None:
+                    paper_model.append((t[0], t[2], t[1] == winner))
+                if (t := pick_trade(blend(pc, mkt_probs, 0.5), pm, min_edge=0.04)) is not None:
+                    paper_blend.append((t[0], t[2], t[1] == winner))
+                if j % 200 == 0:
+                    print(f"    … {j}/{len(price_jobs)}")
 
     # ------------------------------------------------ fit on everything & save
     final = {st.icao_code: fit_station([r for r, _, _ in records[st.city_slug]], st.unit) for st in stations}
@@ -341,20 +412,37 @@ async def main() -> int:
              "LOWER log loss = better. Guessing evenly across ~11 buckets scores about 2.40.", "",
              generic.line(), calibrated.line()]
     if market.logloss:
-        lines.append(market.line())
+        lines += [market.line()] + [sc.line() for sc in blends.values()]
+        best_blend = min(blends.values(), key=lambda sc: statistics.fmean(sc.logloss))
+        verdict = ("YES — mixing our probabilities into the market's IMPROVES on the market alone: "
+                   "the bot knows something the price doesn't."
+                   if statistics.fmean(best_blend.logloss) < statistics.fmean(market.logloss) - 0.005 else
+                   "NO — adding our probabilities does not improve on the market's price; "
+                   "no evidence of edge at this decision time.")
+        lines += ["", f"Edge test (market scored on {len(market.logloss)} city-days): {verdict}"]
     lines += ["", "Reliability — station-calibrated (want 'happened' ≈ 'we said'):"] + calibrated.reliability()
     lines += ["", "Reliability — generic settings:"] + generic.reliability()
     if market.logloss:
         lines += ["", "Reliability — Polymarket prices:"] + market.reliability()
-    if paper:
-        pnl = sum((PAPER_STAKE / pr - PAPER_STAKE) if won else -PAPER_STAKE for _, pr, won in paper)
-        lines += ["", f"Paper trades (edge ≥ {EDGE_FOR_PAPER_TRADES:.0%} at the market price, ${PAPER_STAKE:.0f} each):",
-                  f"    trades={len(paper)}  won={sum(w for *_, w in paper)}  "
-                  f"P&L=${pnl:+.2f}  ROI={pnl / (PAPER_STAKE * len(paper)):+.1%}",
-                  "    (Optimistic: uses traded prices, not the ask you'd actually pay.)"]
-    lines += ["", f"{'City':<14}{'days':>6}{'generic':>10}{'calibrated':>12}"]
-    for name, n, g, c in sorted(per_city, key=lambda x: x[3] - x[2]):
-        lines.append(f"{name:<14}{n:>6}{g:>10.3f}{c:>12.3f}")
+    if args.prices:
+        lines += paper_lines(f"Paper trades — live bot rules (edge {EDGE_FOR_PAPER_TRADES:.0%}–{MAX_PLAUSIBLE_EDGE:.0%}, "
+                             f"P ≥ {MIN_PROB:.0%}, 1 per city-day, ${PAPER_STAKE:.0f} each)", paper_model)
+        lines += paper_lines("Paper trades — blend rules (50/50 blend must beat the price by ≥ 4%)", paper_blend)
+        lines += ["    Caveats: uses the last TRADED price (the ask you'd pay is higher, especially for cheap",
+                  "    buckets at midnight); a few long-shot wins can swing the total — see the 90% range."]
+    has_mkt = any(c["mkt"].logloss for c in per_city.values())
+    head = f"{'City':<14}{'days':>6}{'generic':>10}{'calibrated':>12}"
+    if has_mkt:
+        head += f"{'| ours':>9}{'market':>9}{'blend':>9}"
+    lines += ["", head]
+    for name, c in sorted(per_city.items(), key=lambda kv: kv[1]["cal"] - kv[1]["generic"]):
+        row = f"{name:<14}{c['n']:>6}{c['generic']:>10.3f}{c['cal']:>12.3f}"
+        if c["mkt"].logloss:
+            row += (f"{statistics.fmean(c['ours_on_mkt_days'].logloss):>9.3f}"
+                    f"{statistics.fmean(c['mkt'].logloss):>9.3f}{statistics.fmean(c['bl'].logloss):>9.3f}")
+        lines.append(row)
+    if has_mkt:
+        lines.append("    (ours / market / blend are scored on the same days that had prices)")
     lines += ["", "Learned station settings (all days):",
               f"{'ICAO':<6}{'days':>5}{'sigma':>8}  model offset (weight %) — station − model"]
     for icao, c in sorted(final.items()):
@@ -371,7 +459,8 @@ async def main() -> int:
         existing.update(final)
         calmod.save(existing, meta={"generated": datetime.now(timezone.utc).isoformat(),
                                     "period": f"{start}..{end}", "lead": "previous_day1"})
-        print(f"\nSaved calibration for {len(final)} stations → bot/calibration/{calmod.CAL_PATH.name}")
+        print(f"\nUpdated calibration for {len(final)} stations (file holds {len(existing)}) "
+              f"→ bot/calibration/{calmod.CAL_PATH.name}")
     print(f"Report saved → bot/calibration/{REPORT.name}")
     return 0
 
