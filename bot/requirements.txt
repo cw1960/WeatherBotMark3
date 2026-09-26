@@ -1,5 +1,7 @@
 # Official Polymarket SDK — 0.x may change between minors, so pin the minor we coded against.
 polymarket-client>=0.11,<0.12
+# TypeSafe's official SDK for Jev (System One).
+typesafe-sdk>=0.7.1,<0.8
 supabase>=2.5,<3
 httpx>=0.27,<1
 python-dotenv>=1.0

@@ -38,8 +38,7 @@ export default async function Dashboard() {
             <Row k="Max budget" v={`$${config?.max_budget_usdc ?? "—"}`} />
             <Row k="Max per order" v={`$${config?.max_order_usdc ?? "—"}`} />
             <Row k="Daily loss limit" v={`$${config?.daily_loss_limit_usdc ?? "—"}`} />
-            <Row k="Min divergence" v={`${config?.min_divergence_deg ?? "—"}°`} />
-            <Row k="Min Jev confidence" v={`${config?.min_jev_confidence ?? "—"}`} />
+            <Row k="Min edge per trade" v={`${config?.min_edge_pct ?? "—"}%`} />
           </dl>
         </div>
 

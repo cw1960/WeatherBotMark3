@@ -34,10 +34,9 @@ class Settings:
     pm_private_key: str = field(default_factory=lambda: _env("POLYMARKET_PRIVATE_KEY"))
     pm_wallet_address: str = field(default_factory=lambda: _env("POLYMARKET_FUNDER_ADDRESS"))
 
-    # Jev
-    jev_api_url: str = field(default_factory=lambda: _env("JEV_API_URL", "https://api.jev.ai/v1"))
-    jev_api_key: str = field(default_factory=lambda: _env("JEV_API_KEY"))
-    jev_model: str = field(default_factory=lambda: _env("JEV_MODEL", "system-one"))
+    # Jev (TypeSafe System One). Pin the model so behaviour doesn't change under us.
+    jev_api_key: str = field(default_factory=lambda: _env("TYPESAFE_API_KEY") or _env("JEV_API_KEY"))
+    jev_model: str = field(default_factory=lambda: _env("TYPESAFE_DEFAULT_MODEL") or _env("JEV_MODEL", "jev-1.13.0"))
 
     # Open-Meteo commercial key (free endpoint is non-commercial only)
     open_meteo_api_key: str = field(default_factory=lambda: _env("OPEN_METEO_API_KEY"))
@@ -55,7 +54,7 @@ class Settings:
                 "supabase_url": "SUPABASE_URL",
                 "supabase_service_role_key": "SUPABASE_SERVICE_ROLE_KEY",
                 "pm_private_key": "POLYMARKET_PRIVATE_KEY",
-                "jev_api_key": "JEV_API_KEY",
+                "jev_api_key": "TYPESAFE_API_KEY",
             }
             raise RuntimeError(
                 "Missing required environment variable(s) in bot/.env: "

@@ -65,6 +65,8 @@ class ModelDay:
     full_day_high: float           # station unit
     remaining_high: float | None   # None when no hours remain today
     hours_remaining: int
+    elapsed_high: float | None = None  # model's max over hours already past today (for bias vs obs)
+    hours_elapsed: int = 0
 
 
 @dataclass
@@ -129,13 +131,12 @@ def summarise_hourly(
     fc = StationForecast(station.icao_code, station.unit, target_date, now)
     stamps = [datetime.fromtimestamp(t, tz=timezone.utc) for t in times_utc]
     for model, temps in temps_by_model.items():
-        day, rest = [], []
+        day, rest, past = [], [], []
         for ts, t in zip(stamps, temps):
             if t is None or not (day_start <= ts < day_end):
                 continue
             day.append(t)
-            if ts >= now:
-                rest.append(t)
+            (rest if ts >= now else past).append(t)
         if len(day) < 12:  # model doesn't cover this day / location (e.g. HRRR abroad)
             continue
         fc.models[model] = ModelDay(
@@ -143,6 +144,8 @@ def summarise_hourly(
             full_day_high=_to_unit(max(day), station.unit),
             remaining_high=_to_unit(max(rest), station.unit) if rest else None,
             hours_remaining=len(rest),
+            elapsed_high=_to_unit(max(past), station.unit) if past else None,
+            hours_elapsed=len(past),
         )
     return fc
 

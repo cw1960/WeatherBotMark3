@@ -4,7 +4,7 @@
 bot/
 ├── main.py                     # asyncio daemon: discover → observe → evaluate → gate → FOK → audit
 ├── discover_markets.py         # report: every city's markets today/tomorrow + live METAR bucket
-├── edge_report.py              # report: every model's forecast per city, disagreement, TAF
+├── edge_report.py              # report: every model per city, bucket probabilities vs prices
 ├── requirements.txt            # polymarket-client pinned to 0.11.x
 ├── requirements-dev.txt        # + pytest
 ├── .env.example                # copy to .env (git-ignored)
@@ -14,7 +14,8 @@ bot/
     ├── settings.py             # all creds from os.environ
     ├── models.py               # pydantic records (temps in the station's own unit)
     ├── db.py                   # Supabase: config, stations, market_buckets, audit
-    ├── strategy.py             # divergence + Jev gate → TradeSignal | skip
+    ├── probability.py          # ALL the maths: models + bias persistence + Jev → bucket probabilities
+    ├── strategy.py             # edge = our probability − best ask → pick bucket, FOK price cap
     ├── weather/
     │   ├── metar.py            # aviationweather.gov, every station worldwide in one request
     │   ├── forecast.py         # ~10 models via Open-Meteo (HRRR in US) → consensus + spread
@@ -22,7 +23,7 @@ bot/
     │   └── afd.py              # NWS Area Forecast Discussion (US offices only)
     ├── ai/
     │   ├── evidence.py         # one bundle per city: obs + every model + TAF + AFD + market
-    │   └── jev.py              # Jev System One reads the bundle — every city
+    │   └── jev.py              # Jev via typesafe-sdk: 2 semantic questions per city
     └── exchange/
         ├── markets.py          # Gamma API discovery, bucket parsing, rules verification
         └── polymarket.py       # polymarket-client: order books + FOK-only execution
@@ -41,8 +42,19 @@ bot/
 
 ## Open TODOs before going live
 
-- `ai/jev.py`: confirm Jev's real API contract (currently assumes OpenAI-compatible chat).
+- `TYPESAFE_API_KEY` in bot/.env for Jev.
 - `OPEN_METEO_API_KEY`: commercial key required before live trading.
-- `strategy.py`: replace the placeholder probability with a real model (use the model spread
-  and Jev's expected_high to build a distribution over buckets).
+- Tune the constants at the top of `probability.py` by backtesting against settled markets.
 - Daily budget / loss-limit enforcement across trades.
+
+## How a decision is made (per city, every minute)
+
+1. Code builds a probability for every bucket from ~10 models, each adjusted for how the
+   station has been running against that model so far today, floored at the observed high.
+2. Jev (TypeSafe System One) answers two questions *in words* — TypeSafe's docs say Jev is
+   not a calculator, so it never compares numbers: will the high end up much cooler / cooler /
+   as forecast / warmer / much warmer than the models; has the peak already passed? Code
+   turns those probabilities into shifts of the distribution. Jev is re-asked only when its
+   inputs change.
+3. edge = our probability − best ask. Trade the best bucket if edge ≥ min edge AND the models
+   alone also say it's cheap. FOK price cap = probability − min edge.

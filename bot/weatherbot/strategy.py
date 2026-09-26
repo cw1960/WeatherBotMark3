@@ -1,65 +1,78 @@
 """
-Divergence strategy: METAR ground truth vs model forecast, gated by Jev's AFD read.
+Bucket selection: compare our probability for each bucket with its best ask on Polymarket.
 
-Deliberately thin and unit-agnostic (every temperature is in the station's own unit).
-It returns a TradeSignal or a skip reason; the main loop handles the trading_active
-gate and audit logging.
+    edge(bucket) = P_ours(bucket) − best_ask(bucket)        (a YES share pays $1 if right)
 
-The thresholds in config (min_divergence_deg) are in degrees of the station's unit, so a
-2.0 threshold means 2°F for US cities and 2°C elsewhere. Revisit when tuning.
+Trade the bucket with the largest edge when ALL of these hold:
+  * edge ≥ config.min_edge_pct                      (after Jev's adjustment)
+  * P_models_only(bucket) > best_ask                 (the raw models agree it's cheap — Jev
+                                                       alone can't create a trade)
+  * P_ours(bucket) ≥ MIN_PROB                        (don't buy far tails; the distribution's
+                                                       tails are the least trustworthy part)
+FOK price cap = P_ours − min_edge, rounded DOWN to the cent, so every share that fills still
+carries at least the minimum edge. If the cap is below the best ask there is no trade.
 """
 from __future__ import annotations
 
 from datetime import date
+from math import floor
 
-from .models import BotConfig, JevEvaluation, MetarObservation, ModelForecast, Station, TradeSignal
+from .exchange.markets import Bucket
+from .models import BotConfig, Station, TradeSignal
+
+MIN_PROB = 0.10
+MAX_PRICE = 0.99
 
 
-def evaluate(
+def select_trade(
     *,
     station: Station,
     cfg: BotConfig,
-    metar: MetarObservation,
-    forecast: ModelForecast,
-    jev: JevEvaluation,
     target_date: date,
-    outcome_label: str,
-    token_id: str,
-    market_price: float,
-) -> tuple[TradeSignal | None, str | None]:
-    divergence = round(metar.high_so_far - forecast.high, 1)
+    buckets: tuple[Bucket, ...] | list[Bucket],
+    probs: dict[str, float],
+    probs_models_only: dict[str, float],
+    asks: dict[str, float],
+    divergence: float,
+) -> tuple[TradeSignal | None, str, list[dict]]:
+    """Returns (signal or None, reason, per-bucket table for the audit log)."""
+    min_edge = cfg.min_edge_pct / 100
+    table, candidates = [], []
+    for b in buckets:
+        p, p0, ask = probs.get(b.label, 0.0), probs_models_only.get(b.label, 0.0), asks.get(b.label)
+        edge = (p - ask) if ask is not None else None
+        table.append({"bucket": b.label, "p": round(p, 4), "p_models_only": round(p0, 4),
+                      "ask": ask, "edge": None if edge is None else round(edge, 4)})
+        if ask is None or b.closed:
+            continue
+        if edge >= min_edge and p0 > ask and p >= MIN_PROB:
+            candidates.append((edge, b, p, ask))
 
-    if abs(divergence) < cfg.min_divergence_deg:
-        return None, f"divergence {divergence:+.1f}°{station.unit} below threshold {cfg.min_divergence_deg}"
+    if not candidates:
+        best = max((r for r in table if r["edge"] is not None), key=lambda r: r["edge"], default=None)
+        if best is None:
+            return None, "no prices on any bucket", table
+        return None, (f"best edge {best['edge']*100:+.1f}% on {best['bucket']} "
+                      f"(p={best['p']:.2f} vs ask {best['ask']:.2f}) — below {cfg.min_edge_pct}% "
+                      f"or not confirmed by models"), table
 
-    if jev.confidence < cfg.min_jev_confidence:
-        return None, f"jev confidence {jev.confidence:.2f} below {cfg.min_jev_confidence}"
-
-    # Jev must agree with the direction the observation is already pushing.
-    obs_direction = "warmer" if divergence > 0 else "cooler"
-    if jev.direction not in (obs_direction, "neutral"):
-        return None, f"jev says {jev.direction}, observation says {obs_direction}"
-
-    # TODO: real probability model. Placeholder: blend divergence + Jev confidence.
-    model_probability = min(0.95, 0.5 + 0.1 * abs(divergence) * jev.confidence)
-    implied_probability = market_price
-    edge_pct = round((model_probability - implied_probability) * 100, 2)
-
-    if edge_pct < cfg.min_edge_pct:
-        return None, f"edge {edge_pct:.1f}% below {cfg.min_edge_pct}%"
+    edge, bucket, p, ask = max(candidates, key=lambda c: c[0])
+    cap = min(MAX_PRICE, floor(round((p - min_edge) * 100, 6)) / 100)
+    if cap < ask:
+        return None, f"price cap {cap:.2f} below ask {ask:.2f} on {bucket.label}", table
 
     signal = TradeSignal(
         station=station,
         target_date=target_date,
-        outcome_label=outcome_label,
-        token_id=token_id,
+        outcome_label=bucket.label,
+        token_id=bucket.token_yes,
         side="BUY",
-        price=round(market_price, 2),
+        price=cap,
         size_usdc=min(cfg.max_order_usdc, cfg.max_budget_usdc),
-        market_price=market_price,
-        implied_probability=implied_probability,
-        model_probability=model_probability,
-        edge_pct=edge_pct,
+        market_price=ask,
+        implied_probability=ask,
+        model_probability=round(p, 4),
+        edge_pct=round(edge * 100, 2),
         divergence=divergence,
     )
-    return signal, None
+    return signal, "ok", table

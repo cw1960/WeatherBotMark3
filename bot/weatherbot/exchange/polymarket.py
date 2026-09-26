@@ -71,6 +71,19 @@ class PolymarketExecutor:
         best = min(book.asks, key=lambda lvl: lvl.price)  # don't rely on sort order
         return float(best.price), float(best.size)
 
+    async def best_asks(self, token_ids: list[str]) -> dict[str, tuple[float, float]]:
+        """Best ask (price, size) for many tokens in ONE request. Tokens with no asks are omitted."""
+        assert self._public is not None, "use `async with PolymarketExecutor()`"
+        if not token_ids:
+            return {}
+        books = await self._public.get_order_books(token_ids=token_ids)
+        out: dict[str, tuple[float, float]] = {}
+        for book in books:
+            if book.asks:
+                best = min(book.asks, key=lambda lvl: lvl.price)
+                out[str(book.asset_id)] = (float(best.price), float(best.size))
+        return out
+
     # --------------------------------------------------------------- execution
     async def place_fok(self, signal: TradeSignal, *, live: bool) -> ExecutionResult:
         """Fill-Or-Kill BUY capped at signal.price. `live` must be the freshly-read

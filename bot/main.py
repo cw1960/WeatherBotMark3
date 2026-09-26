@@ -34,11 +34,12 @@ import structlog
 
 from weatherbot import strategy
 from weatherbot.ai.evidence import build_evidence
-from weatherbot.ai.jev import JevClient
+from weatherbot.ai.jev import JevClient, build_state
+from weatherbot.probability import bucket_probabilities, forecast_distribution
 from weatherbot.db import Database
 from weatherbot.exchange.markets import CityDay, GammaClient
 from weatherbot.exchange.polymarket import ORDER_TYPE, PolymarketExecutor
-from weatherbot.models import MetarObservation, ModelForecast, Station
+from weatherbot.models import JevEvaluation, MetarObservation, Station
 from weatherbot.settings import settings
 from weatherbot.weather.afd import AfdClient
 from weatherbot.weather.forecast import ForecastClient, StationForecast, model_for
@@ -75,12 +76,14 @@ class Daemon:
         self.forecast = ForecastClient(self.http)
         self.afd = AfdClient(self.http)
         self.taf = TafClient(self.http)
-        self.jev = JevClient(self.http)
+        self.jev = JevClient()
+        self._jev_cache: dict[str, tuple[tuple, JevEvaluation]] = {}
         self.executor = PolymarketExecutor()
         self.markets: dict[tuple[str, date], CityDay] = {}
         self._markets_refreshed_at = 0.0
         self.forecasts: dict[tuple[str, date], StationForecast] = {}
         self.tafs: dict[str, Taf] = {}
+        self.afds: dict[str, tuple[datetime, str]] = {}
         self._forecasts_refreshed_at = 0.0
         self._sem = asyncio.Semaphore(MAX_CONCURRENT_STATIONS)
         self._stop = asyncio.Event()
@@ -106,6 +109,7 @@ class Daemon:
                 except asyncio.TimeoutError:
                     pass
             log.info("daemon_stop")
+        await self.jev.aclose()
         await self.http.aclose()
 
     # ------------------------------------------------------- market refresh
@@ -160,9 +164,15 @@ class Daemon:
             log.error("taf_refresh_failed", error=str(tafs))
         else:
             self.tafs = tafs
+        for office in sorted({s.nws_office for s in stations if s.nws_office}):
+            try:
+                if (afd := await self.afd.latest(office)) is not None:
+                    self.afds[office] = afd
+            except httpx.HTTPError as exc:
+                log.warning("afd_failed", office=office, error=str(exc))
         n_models = sorted({m for f in self.forecasts.values() for m in f.models})
         log.info("forecasts_refreshed", station_days=len(self.forecasts), models=n_models,
-                 tafs=len(self.tafs))
+                 tafs=len(self.tafs), afds=len(self.afds))
 
     # ---------------------------------------------------------------- cycle
     async def cycle(self) -> int:
@@ -231,74 +241,76 @@ class Daemon:
         station_fc = self.forecasts.get((station.icao_code, target_date))
         if station_fc is None or not station_fc.models:
             return await skip("no model forecasts for today")
-        # Two different consensus numbers, on purpose:
-        #  * raw_consensus: median of the models' full-day highs (what they expected).
-        #    observed − raw is the divergence: the station running hotter/colder than modelled.
-        #  * consensus: median of the models' projected FINAL highs, each floored at the
-        #    observed high (the high can only rise). This picks the bucket.
+        # divergence: observed high vs the models' own full-day forecasts (median).
         raw_consensus = station_fc.raw_consensus()
-        consensus = station_fc.consensus(metar.high_so_far)
-        spread = station_fc.spread(metar.high_so_far)
         headline = station_fc.projected_highs(metar.high_so_far).get(model_name)
+        divergence = round(metar.high_so_far - raw_consensus, 1)
         audit.update(
             model_name=f"consensus of {len(station_fc.models)}",
             model_high=raw_consensus,
             secondary_model_high=headline,
-            model_spread=spread,
-            divergence=round(metar.high_so_far - raw_consensus, 1),
+            model_spread=station_fc.spread(metar.high_so_far),
+            divergence=divergence,
         )
 
-        # Each model's projection already accounts for the high observed so far
-        # (the high can only rise). The consensus of those picks the bucket.
-        bucket = city_day.bucket_for(consensus)
-        if bucket is None or bucket.closed:
-            return await skip(f"no open bucket for consensus high {consensus}°{station.unit}")
-        audit.update(market_id=bucket.market_id, condition_id=bucket.condition_id,
-                     market_outcome=bucket.label, token_id=bucket.token_yes)
+        # Models-only probability for every bucket (code does all the maths).
+        buckets = city_day.buckets
+        dist0 = forecast_distribution(station_fc, metar.high_so_far, station.unit)
+        probs_models_only = bucket_probabilities(dist0, buckets)
 
-        # Evidence for Jev — every city. The NWS discussion only exists for US offices.
-        afd = None
-        if station.nws_office:
-            try:
-                afd = await self.afd.latest(station.nws_office)
-            except httpx.HTTPError as exc:
-                log.warning("afd_failed", city=station.city_slug, error=str(exc))
-        evidence = build_evidence(
-            station=station, metar=metar, forecast=station_fc,
-            taf=self.tafs.get(station.icao_code), afd=afd, city_day=city_day,
-            now=datetime.now(ZoneInfo("UTC")),
-        )
+        # Jev — every city. The NWS discussion only exists for US offices.
+        afd = self.afds.get(station.nws_office) if station.nws_office else None
+        taf = self.tafs.get(station.icao_code)
+        now = datetime.now(ZoneInfo("UTC"))
+        evidence = build_evidence(station=station, metar=metar, forecast=station_fc, taf=taf,
+                                  afd=afd, city_day=city_day, now=now)
+        jev_state = build_state(station=station, metar=metar, forecast=station_fc, taf=taf,
+                                afd=afd, now=now)
+        evidence["jev_state"] = jev_state
         audit["evidence"] = evidence
         if afd:
             audit["afd_issued_at"] = afd[0].isoformat()
 
-        try:
-            jev = await self.jev.evaluate(evidence)
-        except Exception as exc:
-            return await skip(f"jev unavailable: {exc}")
+        # Re-ask Jev only when its inputs change (new METAR, forecasts, TAF or AFD).
+        fingerprint = (metar.observed_at, station_fc.fetched_at, taf.issued if taf else None,
+                       afd[0] if afd else None, now.astimezone(ZoneInfo(station.timezone)).hour)
+        cached = self._jev_cache.get(station.city_slug)
+        if cached and cached[0] == fingerprint:
+            jev = cached[1]
+        else:
+            try:
+                jev = await self.jev.evaluate(jev_state)
+            except Exception as exc:
+                return await skip(f"jev unavailable: {exc}")
+            self._jev_cache[station.city_slug] = (fingerprint, jev)
+
+        dist = forecast_distribution(station_fc, metar.high_so_far, station.unit,
+                                     jev_shift_probs=jev.shift_probs, p_peak_passed=jev.p_peak_passed)
+        probs = bucket_probabilities(dist, buckets)
+        expected_high = round(sum(k * p for k, p in dist.items()), 1)
         audit.update(
             jev_sentiment=jev.raw, jev_confidence=jev.confidence, jev_direction=jev.direction,
-            jev_expected_high=jev.expected_high, afd_excerpt=jev.afd_excerpt,
+            jev_expected_high=expected_high, afd_excerpt=jev.afd_excerpt,
         )
-        forecast = ModelForecast(icao_code=station.icao_code, model="consensus",
-                                 target_date=target_date, high=raw_consensus, unit=station.unit)
 
-        quote = await self.executor.best_ask(bucket.token_yes)
-        if quote is None:
-            return await skip("empty order book")
-        market_price, _ask_size = quote
-        audit["market_price"] = market_price
+        # Prices for every bucket in one request.
+        quotes = await self.executor.best_asks([b.token_yes for b in buckets])
+        asks = {b.label: quotes[b.token_yes][0] for b in buckets if b.token_yes in quotes}
 
         cfg = await self.db.get_config()
-        sig, skip_reason = strategy.evaluate(
-            station=station, cfg=cfg, metar=metar, forecast=forecast, jev=jev,
-            target_date=target_date, outcome_label=bucket.label,
-            token_id=bucket.token_yes, market_price=market_price,
+        sig, reason, table = strategy.select_trade(
+            station=station, cfg=cfg, target_date=target_date, buckets=buckets,
+            probs=probs, probs_models_only=probs_models_only, asks=asks, divergence=divergence,
         )
+        evidence["buckets"] = table
         if sig is None:
-            return await skip(skip_reason or "strategy declined")
+            return await skip(reason)
 
+        chosen = next(b for b in buckets if b.label == sig.outcome_label)
         audit.update(
+            market_id=chosen.market_id, condition_id=chosen.condition_id,
+            market_outcome=chosen.label, token_id=chosen.token_yes,
+            market_price=sig.market_price,
             implied_probability=sig.implied_probability,
             model_probability=sig.model_probability,
             edge_pct=sig.edge_pct,

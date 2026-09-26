@@ -23,18 +23,21 @@ class FakeDB:
 class FakeJev:
     def __init__(self):
         self.seen = None
+        self.calls = 0
 
-    async def evaluate(self, evidence):
-        self.seen = evidence
-        return JevEvaluation(direction="warmer", confidence=0.9, rationale="sunny", expected_high=27)
+    async def evaluate(self, state):
+        self.seen, self.calls = state, self.calls + 1
+        return JevEvaluation(direction="neutral", confidence=0.8, rationale="as forecast",
+                             shift_probs={"as_forecast": 1.0}, p_peak_passed=0.1)
 
 
 class FakeExecutor:
     def __init__(self):
         self.placed = []
 
-    async def best_ask(self, token_id):
-        return 0.30, 100.0
+    async def best_asks(self, token_ids):
+        # market thinks 27°C is unlikely (0.30); everything else priced at 0.05
+        return {t: ((0.30, 100.0) if t == "yes4" else (0.05, 100.0)) for t in token_ids}
 
     async def place_fok(self, sig, *, live):
         from weatherbot.models import ExecutionResult
@@ -45,17 +48,17 @@ class FakeExecutor:
 def _daemon(monkeypatch, st, today):
     d = daemon_mod.Daemon.__new__(daemon_mod.Daemon)   # skip __init__ (no real DB/http)
     d.db, d.jev, d.executor = FakeDB(), FakeJev(), FakeExecutor()
-    d.tafs = {}
-    d.afd = None
+    d.tafs, d.afds, d._jev_cache = {}, {}, {}
     labels = [("23°C or below", None, 23)] + [(f"{t}°C", t, t) for t in range(24, 33)] + [("33°C or higher", 33, None)]
     buckets = tuple(Bucket(st.city_slug, today, "e", "s", f"m{i}", f"0x{i}", lab, lo, hi, "C", f"yes{i}", f"no{i}",
                            True, True, False) for i, (lab, lo, hi) in enumerate(labels))
     d.markets = {(st.city_slug, today): CityDay(st.city_slug, today, "s", True, buckets, True)}
     now = datetime.now(timezone.utc)
     d.forecasts = {(st.icao_code, today): StationForecast(st.icao_code, "C", today, now, {
-        "ecmwf_ifs025": ModelDay("ecmwf_ifs025", 24.0, 24.0, 6),
-        "icon_seamless": ModelDay("icon_seamless", 24.0, 24.0, 6),
-        "gfs_seamless": ModelDay("gfs_seamless", 25.0, 25.0, 6),
+        # models expected ~24–25 all day; little heating left
+        "ecmwf_ifs025": ModelDay("ecmwf_ifs025", 24.0, 23.0, 2, 24.0, 12),
+        "icon_seamless": ModelDay("icon_seamless", 24.0, 23.0, 2, 24.0, 12),
+        "gfs_seamless": ModelDay("gfs_seamless", 25.0, 24.0, 2, 25.0, 12),
     })}
     return d
 
@@ -69,16 +72,22 @@ async def test_non_us_city_goes_through_jev_and_reaches_simulated_fok(monkeypatc
                              high_so_far=27.0, unit="C", n_obs_today=10)
     await d.evaluate_station(st, metar, "cluster-1")
 
-    assert d.jev.seen is not None and d.jev.seen["afd"] is None      # Jev ran without an AFD
+    assert d.jev.calls == 1 and "forecaster_discussion" not in d.jev.seen   # Jev ran without an AFD
     assert len(d.executor.placed) == 1
     sig, live = d.executor.placed[0]
-    assert live is False and sig.outcome_label == "27°C"             # high can't go below 27
+    # Observed 27°C late in the day: the high can't fall, so 27°C is very likely — the market's
+    # 0.30 is a big edge.
+    assert live is False and sig.outcome_label == "27°C" and sig.market_price == 0.30
+    assert sig.model_probability > 0.8 and sig.price >= 0.30
     row = d.db.rows[-1]
     assert row["decision"] == "simulated" and row["order_type"] == "FOK"
-    assert row["model_high"] == 24.0 and row["obs_high_so_far"] == 27.0   # models expected 24
-    assert row["divergence"] == 3.0
-    assert row["jev_expected_high"] == 27 and row["evidence"]["station"]["icao"] == "RJTT"
-    assert row["token_id"] == sig.token_id
+    assert row["model_high"] == 24.0 and row["obs_high_so_far"] == 27.0 and row["divergence"] == 3.0
+    assert row["evidence"]["station"]["icao"] == "RJTT" and len(row["evidence"]["buckets"]) == 11
+    assert row["token_id"] == sig.token_id == "yes4"
+
+    # Same inputs next cycle → Jev is NOT called again (cached by fingerprint)
+    await d.evaluate_station(st, metar, "cluster-2")
+    assert d.jev.calls == 1
 
 
 async def test_missing_forecast_is_logged_as_skip(monkeypatch):

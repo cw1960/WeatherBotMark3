@@ -3,12 +3,15 @@ Edge report — what every forecast model says about today's high, city by city.
 
     python edge_report.py              # summary table for all active cities
     python edge_report.py nyc tokyo    # just these cities
-    python edge_report.py nyc --detail # every model + the airport forecast (TAF) for one city
+    python edge_report.py nyc --detail # every model, the TAF, and every bucket's probability vs price
+    python edge_report.py --jev        # also ask Jev (needs TYPESAFE_API_KEY in bot/.env)
 
-Reads public APIs only (Polymarket, aviationweather.gov, Open-Meteo). No keys, no trading.
+Reads public APIs only (Polymarket, aviationweather.gov, Open-Meteo); --jev also calls Jev.
+Never trades.
 Columns: OBS HIGH = highest reading so far today; MODELS SAID = median of the models'
 full-day forecasts; DIFF = how much hotter (+) or colder (−) the station is running than
-modelled so far; FINAL EST = median projected final high; SPREAD = model disagreement.
+modelled so far; FINAL EST = median projected final high; SPREAD = model disagreement;
+BEST EDGE = our probability minus Polymarket's price on the most mispriced bucket.
 
 Cities where the models point at DIFFERENT buckets are flagged: that disagreement is where
 market prices are most often wrong, and where Jev's judgment matters most.
@@ -23,7 +26,11 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
+from polymarket import AsyncPublicClient
+
 from weatherbot.ai.evidence import build_evidence
+from weatherbot.ai.jev import JevClient, build_state
+from weatherbot.probability import bucket_probabilities, forecast_distribution
 from weatherbot.catalog import CATALOG, to_station
 from weatherbot.exchange.markets import GammaClient
 from weatherbot.settings import settings
@@ -39,7 +46,8 @@ def fmt(v, unit=""):
 async def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cities", nargs="*", help="city slugs (default: all active)")
-    ap.add_argument("--detail", action="store_true", help="show every model and the TAF")
+    ap.add_argument("--detail", action="store_true", help="show every model, the TAF and every bucket")
+    ap.add_argument("--jev", action="store_true", help="include Jev's judgment (needs TYPESAFE_API_KEY)")
     args = ap.parse_args()
 
     if args.cities:
@@ -73,9 +81,31 @@ async def main() -> int:
         )
         markets = dict(markets)
 
+        tokens = [b.token_yes for cd in markets.values() for b in cd.buckets]
+        quotes: dict[str, tuple[float, float]] = {}
+        async with AsyncPublicClient() as pm:
+            for i in range(0, len(tokens), 200):
+                for book in await pm.get_order_books(token_ids=tokens[i:i + 200]):
+                    if book.asks:
+                        best = min(book.asks, key=lambda lvl: lvl.price)
+                        quotes[str(book.asset_id)] = (float(best.price), float(best.size))
+
+    jev_verdicts = {}
+    if args.jev:
+        settings.require("jev_api_key")
+        jc = JevClient()
+        for st in stations:
+            day = now.astimezone(ZoneInfo(st.timezone)).date()
+            o, fc = obs.get(st.icao_code), forecasts.get((st.icao_code, day))
+            if o and fc:
+                state = build_state(station=st, metar=o, forecast=fc, taf=tafs.get(st.icao_code),
+                                    afd=None, now=now)
+                jev_verdicts[st.city_slug] = await jc.evaluate(state)
+        await jc.aclose()
+
     print()
     hdr = (f"{'CITY':<14}{'LOCAL':>6}  {'OBS HIGH':>9}{'MODELS SAID':>12}{'DIFF':>7}{'FINAL EST':>10}"
-           f"{'SPREAD':>8}{'MODELS':>7}  {'TAF MAX':>8}  {'BUCKET (final est)':<20}{'MODELS AGREE?'}")
+           f"{'SPREAD':>8}{'MODELS':>7}  {'TAF MAX':>8}  {'BUCKET (final est)':<20}{'MODELS AGREE?':<16}{'BEST EDGE'}")
     print(hdr)
     print("-" * len(hdr))
     flagged = 0
@@ -99,10 +129,22 @@ async def main() -> int:
         agree = "yes" if distinct == 1 else (f"NO — {distinct} buckets" if distinct > 1 else "—")
         if distinct > 1:
             flagged += 1
+        best_edge, probs, asks = "—", {}, {}
+        if fc and cd and cd.buckets and high is not None:
+            v = jev_verdicts.get(st.city_slug)
+            dist = forecast_distribution(fc, high, st.unit,
+                                         jev_shift_probs=v.shift_probs if v else None,
+                                         p_peak_passed=v.p_peak_passed if v else 0.0)
+            probs = bucket_probabilities(dist, cd.buckets)
+            asks = {b.label: quotes[b.token_yes][0] for b in cd.buckets if b.token_yes in quotes}
+            edges = {lab: probs[lab] - a for lab, a in asks.items()}
+            if edges:
+                lab = max(edges, key=edges.get)
+                best_edge = f"{edges[lab]*100:+.0f}% {lab}"
         print(f"{st.city_label[:13]:<14}{now.astimezone(tz).strftime('%H:%M'):>6}  "
               f"{fmt(high, u):>9}{fmt(said, u):>12}{('—' if diff is None else f'{diff:+.1f}'):>7}{fmt(cons, u):>10}"
               f"{fmt(spread):>8}{(len(fc.models) if fc else 0):>7}  "
-              f"{fmt(tx['max_temp'] if tx else None, u):>8}  {bucket[:19]:<20}{agree}")
+              f"{fmt(tx['max_temp'] if tx else None, u):>8}  {bucket[:19]:<20}{agree:<16}{best_edge}")
 
         if args.detail:
             if fc:
@@ -112,6 +154,14 @@ async def main() -> int:
                 for name, m in sorted(fc.models.items(), key=lambda kv: proj[kv[0]]):
                     print(f"    {name:<16}{fmt(m.full_day_high, u):>14}{fmt(m.remaining_high, u):>15}"
                           f"{m.hours_remaining:>9}{fmt(proj[name], u):>11}  {per.get(name) or '—'}")
+            if probs:
+                print(f"    {'bucket':<18}{'our prob':>9}{'price':>8}{'edge':>8}")
+                for b in cd.buckets:
+                    a = asks.get(b.label)
+                    e = f"{(probs[b.label]-a)*100:+.0f}%" if a is not None else "—"
+                    print(f"    {b.label:<18}{probs[b.label]*100:>8.0f}%{('—' if a is None else f'{a:.2f}'):>8}{e:>8}")
+            if (v := jev_verdicts.get(st.city_slug)):
+                print(f"    Jev: {v.rationale}")
             if o:
                 print(f"    latest METAR: {o.raw}")
             if taf:

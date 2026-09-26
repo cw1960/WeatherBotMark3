@@ -68,7 +68,9 @@ class JevEvaluation(BaseModel):
     direction: Literal["warmer", "cooler", "neutral", "uncertain"]
     confidence: float = Field(ge=0.0, le=1.0)
     rationale: str
-    expected_high: float | None = None   # Jev's own point forecast, station unit
+    expected_high: float | None = None   # mean of the final distribution (computed in code)
+    shift_probs: dict[str, float] = Field(default_factory=dict)  # vs_models Choice probabilities
+    p_peak_passed: float = 0.0                                    # peak_passed Noul probability
     afd_issued_at: datetime | None = None
     afd_excerpt: str | None = None
     raw: dict[str, Any] = Field(default_factory=dict)

@@ -1,44 +1,51 @@
-"""Smoke tests for the strategy gate."""
-from datetime import date, datetime, timezone
+"""Bucket selection: edge threshold, model confirmation, price cap."""
+from datetime import date
 
-from weatherbot import strategy
 from weatherbot.catalog import BY_SLUG, to_station
-from weatherbot.models import BotConfig, JevEvaluation, MetarObservation, ModelForecast
+from weatherbot.exchange.markets import Bucket
+from weatherbot.models import BotConfig
+from weatherbot.strategy import select_trade
 
-_STATION = to_station(BY_SLUG["nyc"])
-_NOW = datetime.now(timezone.utc)
-
-
-def _inputs(divergence: float, jev_dir: str = "warmer", jev_conf: float = 0.9):
-    metar = MetarObservation(icao_code="KLGA", observed_at=_NOW, temp=70, high_so_far=70 + divergence, unit="F")
-    fc = ModelForecast(icao_code="KLGA", model="hrrr", target_date=date.today(), high=70, unit="F")
-    jev = JevEvaluation(direction=jev_dir, confidence=jev_conf, rationale="test")
-    return metar, fc, jev
+ST = to_station(BY_SLUG["tokyo"])
+B = [Bucket("tokyo", date(2026, 9, 26), "e", "s", str(i), f"0x{i}", lab, lo, hi, "C", f"yes{i}", f"no{i}", True, True, False)
+     for i, (lab, lo, hi) in enumerate([("24°C or below", None, 24), ("25°C", 25, 25), ("26°C", 26, 26), ("27°C or higher", 27, None)])]
+CFG = BotConfig(min_edge_pct=8, max_order_usdc=25, max_budget_usdc=100)
 
 
-def _run(metar, fc, jev, price=0.40):
-    return strategy.evaluate(
-        station=_STATION, cfg=BotConfig(), metar=metar, forecast=fc, jev=jev,
-        target_date=date.today(), outcome_label="72-73°F", token_id="t", market_price=price,
-    )
+def _run(probs, probs0, asks):
+    return select_trade(station=ST, cfg=CFG, target_date=date(2026, 9, 26), buckets=B,
+                        probs=probs, probs_models_only=probs0, asks=asks, divergence=1.0)
 
 
-def test_small_divergence_skips():
-    sig, reason = _run(*_inputs(1.0))
-    assert sig is None and "divergence" in reason
+def test_picks_largest_edge_and_caps_price():
+    probs = {"24°C or below": 0.05, "25°C": 0.20, "26°C": 0.55, "27°C or higher": 0.20}
+    asks = {"24°C or below": 0.02, "25°C": 0.30, "26°C": 0.35, "27°C or higher": 0.15}
+    sig, reason, table = _run(probs, probs, asks)
+    assert reason == "ok" and sig.outcome_label == "26°C" and sig.token_id == "yes2"
+    assert sig.edge_pct == 20.0
+    assert sig.price == 0.47            # 0.55 − 0.08, every filled share keeps ≥ 8% edge
+    assert len(table) == 4
 
 
-def test_low_jev_confidence_skips():
-    sig, reason = _run(*_inputs(3.0, jev_conf=0.3))
-    assert sig is None and "confidence" in reason
+def test_edge_below_threshold_skips():
+    probs = {"25°C": 0.40}
+    sig, reason, _ = _run(probs, probs, {"25°C": 0.35})
+    assert sig is None and "below 8" in reason
 
 
-def test_jev_disagreement_skips():
-    sig, reason = _run(*_inputs(3.0, jev_dir="cooler"))
-    assert sig is None and "jev says cooler" in reason
+def test_jev_alone_cannot_create_a_trade():
+    probs = {"26°C": 0.60}                 # Jev-adjusted: big edge
+    probs0 = {"26°C": 0.30}                # models alone: not cheap
+    sig, reason, _ = _run(probs, probs0, {"26°C": 0.35})
+    assert sig is None and "not confirmed by models" in reason
 
 
-def test_signal_is_buy_within_limits():
-    sig, reason = _run(*_inputs(3.0))
-    assert reason is None and sig is not None
-    assert sig.side == "BUY" and sig.size_usdc <= BotConfig().max_order_usdc
+def test_far_tail_not_bought():
+    probs = {"27°C or higher": 0.09}
+    sig, _, _ = _run(probs, probs, {"27°C or higher": 0.001})
+    assert sig is None
+
+
+def test_no_prices():
+    sig, reason, _ = _run({"26°C": 0.9}, {"26°C": 0.9}, {})
+    assert sig is None and reason == "no prices on any bucket"
