@@ -22,7 +22,7 @@ Hard rules enforced here, not left to callers:
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any, Final
+from typing import Any, Final, NamedTuple
 
 import structlog
 from polymarket import AsyncPublicClient, AsyncSecureClient
@@ -33,6 +33,19 @@ from ..settings import settings
 log = structlog.get_logger(__name__)
 
 ORDER_TYPE: Final = "FOK"
+
+
+class Quote(NamedTuple):
+    ask: float | None
+    ask_size: float
+    bid: float | None
+
+    @property
+    def mid(self) -> float | None:
+        """The market's own probability estimate: halfway between best bid and best ask."""
+        if self.ask is not None and self.bid is not None:
+            return (self.ask + self.bid) / 2
+        return self.ask if self.ask is not None else self.bid
 
 
 class PolymarketExecutor:
@@ -73,15 +86,24 @@ class PolymarketExecutor:
 
     async def best_asks(self, token_ids: list[str]) -> dict[str, tuple[float, float]]:
         """Best ask (price, size) for many tokens in ONE request. Tokens with no asks are omitted."""
+        return {t: (q.ask, q.ask_size) for t, q in (await self.book_quotes(token_ids)).items()
+                if q.ask is not None}
+
+    async def book_quotes(self, token_ids: list[str]) -> dict[str, "Quote"]:
+        """Best ask, its size, and best bid for many tokens in ONE request (empty books omitted)."""
         assert self._public is not None, "use `async with PolymarketExecutor()`"
         if not token_ids:
             return {}
         books = await self._public.get_order_books(token_ids=token_ids)
-        out: dict[str, tuple[float, float]] = {}
+        out: dict[str, Quote] = {}
         for book in books:
-            if book.asks:
-                best = min(book.asks, key=lambda lvl: lvl.price)
-                out[str(book.asset_id)] = (float(best.price), float(best.size))
+            ask = min(book.asks, key=lambda lvl: lvl.price) if book.asks else None   # don't rely on sort order
+            bid = max(book.bids, key=lambda lvl: lvl.price) if getattr(book, "bids", None) else None
+            if ask is None and bid is None:
+                continue
+            out[str(book.asset_id)] = Quote(
+                ask=float(ask.price) if ask else None, ask_size=float(ask.size) if ask else 0.0,
+                bid=float(bid.price) if bid else None)
         return out
 
     # --------------------------------------------------------------- execution

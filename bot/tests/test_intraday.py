@@ -83,6 +83,7 @@ async def _world(tmp_path, monkeypatch, price_fn):
                                                        "p10": "13:00", "p90": "16:00"}}}))
     monkeypatch.setattr(ib, "PEAKS", peaks)
     monkeypatch.setattr(ib, "REPORT", tmp_path / "r.txt")
+    monkeypatch.setattr(ib, "OUT_CAL", tmp_path / "intraday.json")
     monkeypatch.setattr(bt, "load_station_history", fake_history)
     monkeypatch.setattr(ib.pk, "fetch_iem", fake_iem)
     monkeypatch.setattr(bt, "price_at", fake_price)
@@ -96,10 +97,63 @@ async def test_edge_found_when_market_ignores_readings(tmp_path, monkeypatch):
     report = await _world(tmp_path, monkeypatch, lambda lab, win: 1 / 15)
     sixty = report.split("=== 60 minutes")[1]
     assert "Edge test: YES" in sixty
-    ours = float(sixty.split("Bot (readings + models)")[1].split("log loss=")[1].split()[0])
+    ours = float(sixty.split("Bot, calibrated intraday")[1].split("log loss=")[1].split()[0])
     assert ours < 1.0                                          # readings make the bot sharp
+    assert "Bot, calibrated intraday" in sixty and "Bot before" in sixty
+    from weatherbot.calibration import load_intraday
+    stations, default = load_intraday(60, tmp_path / "intraday.json")
+    assert "EGLC" in stations and default is not None and stations["EGLC"].n_days > 20
 
 
 async def test_no_edge_when_market_already_knows(tmp_path, monkeypatch):
     report = await _world(tmp_path, monkeypatch, lambda lab, win: 0.97 if lab == win else 0.002)
     assert "Edge test: NO" in report.split("=== 60 minutes")[1]
+
+
+# ------------------------------------------------------------- intraday calibration pieces
+from weatherbot import calibration as calm
+
+
+def test_pick_intraday_learns_and_shrinks_toward_pooled():
+    grid = calm.intraday_grid("C")
+    j_city, j_pool = 5, 40
+    city = [[0.5 if j == j_city else 2.0 for j in range(len(grid))] for _ in range(30)]
+    pooled = [0.5 if j == j_pool else 1.0 for j in range(len(grid))]
+    assert (calm.pick_intraday(city, pooled, "C").sigma, calm.pick_intraday(city, pooled, "C").obs_gap) == grid[j_city]
+    few = city[:1]                                            # 1 day: pooled choice wins
+    ic = calm.pick_intraday(few, pooled, "C")
+    assert (ic.sigma, ic.obs_gap) == grid[j_pool] and ic.n_days == 1
+    assert calm.pick_intraday([], None, "C") is None
+
+
+def test_intraday_grid_scales_for_fahrenheit():
+    assert calm.intraday_grid("F")[0] == (round(0.3 * 1.8, 3), round(0.2 * 1.8, 3))
+    assert len(calm.intraday_grid("F")) == len(calm.intraday_grid("C"))
+
+
+def test_intraday_save_load_and_fallback(tmp_path):
+    p = tmp_path / "i.json"
+    calm.save_intraday({120: {"EGLC": calm.IntradayCal(1.2, 0.4, 20)}, 60: {"EGLC": calm.IntradayCal(0.8, 0.4, 20)}},
+                       {60: calm.IntradayCal(1.0, 0.7), 120: calm.IntradayCal(1.4, 0.7)}, p)
+    st, d = calm.load_intraday(70, p)                         # nearest saved offset = 60
+    assert st["EGLC"].sigma == 0.8 and d.sigma == 1.0
+    nyc = calm.intraday_for("KLGA", "F", st, d)               # no own values → pooled, in °F
+    assert nyc.sigma == 1.8 and nyc.obs_gap == round(0.7 * 1.8, 3)
+    assert calm.load_intraday(60, tmp_path / "missing.json") == ({}, None)
+
+
+def test_intraday_values_change_the_distribution():
+    from weatherbot.probability import distribution
+    tight = distribution(observed_high=20.0, means=[20.5], hours_remaining=2, unit="C", sigma_fixed=0.3, obs_gap=0.2)
+    wide = distribution(observed_high=20.0, means=[20.5], hours_remaining=2, unit="C", sigma_fixed=1.5, obs_gap=0.7)
+    assert max(tight.values()) > max(wide.values())
+    assert min(wide) == 20 and min(tight) == 20               # never below the observed high
+
+
+def test_pooled_uses_only_earlier_days():
+    d0 = date(2026, 9, 1)
+    mk = lambda d, v: ib.Case(d, None, None, 0, [], "", None, [v, v])
+    p = ib.Pooled([mk(d0, 1.0), mk(d0 + timedelta(days=1), 3.0), mk(d0 + timedelta(days=1), 5.0)])
+    assert p.before(d0) is None
+    assert p.before(d0 + timedelta(days=1)) == [1.0, 1.0]
+    assert p.before(d0 + timedelta(days=5)) == [3.0, 3.0] == p.all()

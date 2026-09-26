@@ -46,6 +46,7 @@ from weatherbot.exchange.markets import Bucket, _json_list, event_slug, parse_bu
 from weatherbot.models import Station
 from weatherbot.probability import bucket_probabilities, distribution
 from weatherbot.strategy import MAX_PLAUSIBLE_EDGE, MIN_PROB
+from weatherbot.strategy import blend as strategy_blend
 from weatherbot.settings import settings
 from weatherbot.weather.forecast import GLOBAL_MODELS, US_ONLY_MODELS
 
@@ -245,12 +246,9 @@ def predict(rec: DayRecord, cal: StationCal | None, unit: str, buckets: list[Buc
 
 
 def blend(ours: dict[str, float], mkt: dict[str, float], w: float) -> dict[str, float]:
-    """Geometric blend p ∝ ours^w · market^(1−w). If this beats the market alone, our model
-    carries information the market doesn't — the real test of edge."""
-    out = {k: (max(ours.get(k, 0.0), 1e-4) ** w) * (max(mkt.get(k, 0.0), 1e-4) ** (1 - w))
-           for k in set(ours) | set(mkt)}
-    tot = sum(out.values())
-    return {k: v / tot for k, v in out.items()}
+    """Geometric blend p ∝ ours^w · market^(1−w) (the live bot's strategy.blend). If this beats
+    the market alone, our model carries information the market doesn't — the real test of edge."""
+    return strategy_blend(ours, mkt, w)
 
 
 def pick_trade(probs: dict[str, float], prices: dict[str, float], min_edge: float = EDGE_FOR_PAPER_TRADES):

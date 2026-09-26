@@ -124,7 +124,8 @@ class MetarClient:
 
         out: dict[str, MetarObservation] = {}
         for st in stations:
-            obs = self.summarise(st, by_icao.get(st.icao_code, []))
+            obs = self.summarise(st, by_icao.get(st.icao_code, []),
+                                 day=now.astimezone(ZoneInfo(st.timezone)).date())
             if obs is not None:
                 out[st.icao_code] = obs
             else:

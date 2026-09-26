@@ -7,8 +7,9 @@ bot/
 ├── edge_report.py              # report: every model per city, bucket probabilities vs prices
 ├── backtest.py                 # replay past settled markets → score + learn per-station calibration
 ├── peak_times.py               # when does each city's daily high happen? → calibration/peak_times.json
-├── intraday_backtest.py        # edge test at 2 h / 1 h before each city's typical peak
-├── calibration/                # station_calibration.json (used by the bot) + backtest_report.txt
+├── intraday_backtest.py        # edge test at 2 h / 1 h before each city's typical peak + learns
+│                               #   each city's uncertainty at that moment (intraday_calibration.json)
+├── calibration/                # peak_times.json, station_calibration.json, intraday_calibration.json (used by the bot)
 ├── requirements.txt            # polymarket-client pinned to 0.11.x
 ├── requirements-dev.txt        # + pytest
 ├── .env.example                # copy to .env (git-ignored)
@@ -20,7 +21,8 @@ bot/
     ├── db.py                   # Supabase: config, stations, market_buckets, audit
     ├── probability.py          # ALL the maths: models + bias persistence + Jev → bucket probabilities
     ├── calibration.py          # per-station model offsets + spread, learned by backtest.py
-    ├── strategy.py             # edge = our probability − best ask → pick bucket, FOK price cap
+    ├── strategy.py             # blend rule: (our view × market mid) − best ask → pick bucket, FOK cap
+    ├── schedule.py             # decision window per city: ~60 min before its typical peak
     ├── weather/
     │   ├── metar.py            # aviationweather.gov, every station worldwide in one request
     │   ├── forecast.py         # ~10 models via Open-Meteo (HRRR in US) → consensus + spread
@@ -52,14 +54,18 @@ bot/
 - Run `python backtest.py` regularly (e.g. weekly) to refresh `calibration/station_calibration.json`.
 - Daily budget / loss-limit enforcement across trades.
 
-## How a decision is made (per city, every minute)
+## How a decision is made (once per city per day, ~60 min before its typical peak)
 
-1. Code builds a probability for every bucket from ~10 models, each adjusted for how the
-   station has been running against that model so far today, floored at the observed high.
-2. Jev (TypeSafe System One) answers two questions *in words* — TypeSafe's docs say Jev is
-   not a calculator, so it never compares numbers: will the high end up much cooler / cooler /
-   as forecast / warmer / much warmer than the models; has the peak already passed? Code
-   turns those probabilities into shifts of the distribution. Jev is re-asked only when its
-   inputs change.
-3. edge = our probability − best ask. Trade the best bucket if edge ≥ min edge AND the models
-   alone also say it's cheap. FOK price cap = probability − min edge.
+1. `schedule.py` reads each city's typical peak time (`peak_times.py`). A city is only evaluated
+   inside its window: typical peak − 75 min … − 45 min, local time. At most one order per city
+   per day (a FOK that doesn't fill may be retried inside the window).
+2. Code builds a probability for every bucket from ~10 models, each adjusted for how the
+   station has been running against that model so far today, floored at the observed high,
+   using the uncertainty learned for THIS city at THIS time of day (`intraday_calibration.json`).
+3. Jev (optional — needs TYPESAFE_API_KEY) answers two questions *in words*: warmer/cooler than
+   the models? has the peak already passed? Code turns the answers into shifts. Without a key
+   the bot runs on models + market only.
+4. BLEND RULE: our probabilities are blended 50/50 (geometric) with the market's mid prices.
+   Trade the bucket where blend − best ask ≥ config.min_edge_pct (4%), the ask is 1–95¢, and the
+   edge isn't implausibly large (> 30%). FOK price cap = blend − min edge.
+5. `config.trading_active` is re-read right before the order; off → simulated only.

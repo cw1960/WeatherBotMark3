@@ -139,3 +139,92 @@ def load(path: Path | None = None) -> dict[str, StationCal]:
         known = {f: v[f] for f in StationCal.__dataclass_fields__ if f in v}
         out[k] = StationCal(**known)
     return out
+
+
+# ============================================================ intraday (decision-time) calibration
+# The midnight calibration above describes a whole day of uncertainty. ~1 h before the usual
+# peak, most of the day is known and the question is different: how much more can it warm, and
+# how far above what we saw can the settled high sit (hourly reports miss half-hourly peaks)?
+# The first intraday backtest showed the generic values were overconfident (said 77% → happened
+# 60%). So for each city and decision offset we learn, walk-forward, from past decisions:
+#   * sigma   — spread of further heating at that moment (station unit)
+#   * obs_gap — how far above the reports seen so far the settled high may end up
+# chosen from a small grid by log loss, pulled toward the all-city (pooled) choice when a city has
+# few days. Stored in bot/calibration/intraday_calibration.json by intraday_backtest.py.
+INTRADAY_PATH = CAL_PATH.parent / "intraday_calibration.json"
+INTRADAY_SIGMAS_C = tuple(round(0.3 + 0.1 * i, 2) for i in range(23))     # 0.3 … 2.5 °C
+INTRADAY_GAPS_C = (0.2, 0.4, 0.7, 1.0)
+INTRADAY_PRIOR_DAYS = 10     # pseudo-days of the pooled all-city choice
+
+
+@dataclass
+class IntradayCal:
+    sigma: float                 # station unit
+    obs_gap: float               # station unit
+    n_days: int = 0
+    logloss: float | None = None
+
+
+def intraday_grid(unit: str) -> list[tuple[float, float]]:
+    """(sigma, obs_gap) candidates in the station's unit; index i means the same °C pair for every
+    city, so losses can be pooled across °F and °C cities by index."""
+    sc = _scale(unit)
+    return [(round(s * sc, 3), round(g * sc, 3)) for s in INTRADAY_SIGMAS_C for g in INTRADAY_GAPS_C]
+
+
+def pick_intraday(city_losses: list[list[float]], pooled_mean: list[float] | None,
+                  unit: str) -> IntradayCal | None:
+    """city_losses[i][j] = log loss of past decision i under grid pair j. The chosen pair
+    minimises  Σ city losses + INTRADAY_PRIOR_DAYS × pooled mean loss."""
+    grid = intraday_grid(unit)
+    n = len(city_losses)
+    if n == 0 and not pooled_mean:
+        return None
+    k = INTRADAY_PRIOR_DAYS if pooled_mean else 0
+
+    def score(j: int) -> float:
+        return sum(row[j] for row in city_losses) + (k * pooled_mean[j] if k else 0.0)
+
+    best = min(range(len(grid)), key=score)
+    s, g = grid[best]
+    own = round(sum(r[best] for r in city_losses) / n, 3) if n else None
+    return IntradayCal(sigma=s, obs_gap=g, n_days=n, logloss=own)
+
+
+def save_intraday(by_offset: dict[int, dict[str, IntradayCal]], pooled_c: dict[int, IntradayCal],
+                  path: Path | None = None, meta: dict | None = None) -> None:
+    """by_offset[minutes before peak][icao] → IntradayCal; pooled_c[offset] = all-city choice in °C."""
+    path = path or INTRADAY_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"meta": meta or {}, "offsets": {
+        str(off): {"default_c": asdict(pooled_c[off]) if off in pooled_c else None,
+                   "stations": {k: asdict(v) for k, v in sorted(cals.items())}}
+        for off, cals in sorted(by_offset.items())}}
+    path.write_text(json.dumps(payload, indent=2))
+
+
+def load_intraday(offset: int, path: Path | None = None) -> tuple[dict[str, IntradayCal], IntradayCal | None]:
+    """(per-station, pooled default in °C) for the saved offset closest to `offset`."""
+    path = path or INTRADAY_PATH
+    try:
+        data = json.loads(path.read_text()).get("offsets", {})
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}, None
+    if not data:
+        return {}, None
+    key = min(data, key=lambda k: abs(int(k) - offset))
+    block = data[key]
+    fields = IntradayCal.__dataclass_fields__
+    stations = {k: IntradayCal(**{f: v[f] for f in fields if f in v}) for k, v in block.get("stations", {}).items()}
+    d = block.get("default_c")
+    return stations, (IntradayCal(**{f: d[f] for f in fields if f in d}) if d else None)
+
+
+def intraday_for(icao: str, unit: str, stations: dict[str, IntradayCal],
+                 default_c: IntradayCal | None) -> IntradayCal | None:
+    if icao in stations:
+        return stations[icao]
+    if default_c is None:
+        return None
+    sc = _scale(unit)
+    return IntradayCal(sigma=round(default_c.sigma * sc, 3), obs_gap=round(default_c.obs_gap * sc, 3))

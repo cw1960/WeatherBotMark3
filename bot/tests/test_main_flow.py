@@ -35,9 +35,11 @@ class FakeExecutor:
     def __init__(self, ask_27=0.75):
         self.placed, self.ask_27 = [], ask_27
 
-    async def best_asks(self, token_ids):
-        # 27°C priced at ask_27; everything else at 0.05
-        return {t: ((self.ask_27, 100.0) if t == "yes4" else (0.05, 100.0)) for t in token_ids}
+    async def book_quotes(self, token_ids):
+        # 27°C: ask ask_27, bid 5¢ below; everything else ask 0.05 / bid 0.01
+        from weatherbot.exchange.polymarket import Quote
+        return {t: (Quote(self.ask_27, 100.0, self.ask_27 - 0.05) if t == "yes4" else Quote(0.05, 100.0, 0.01))
+                for t in token_ids}
 
     async def place_fok(self, sig, *, live):
         from weatherbot.models import ExecutionResult
@@ -49,6 +51,7 @@ def _daemon(monkeypatch, st, today):
     d = daemon_mod.Daemon.__new__(daemon_mod.Daemon)   # skip __init__ (no real DB/http)
     d.db, d.jev, d.executor = FakeDB(), FakeJev(), FakeExecutor()
     d.tafs, d.afds, d._jev_cache, d.calibration = {}, {}, {}, {}
+    d.intraday, d.intraday_default, d._done, d._announced = {}, None, set(), set()
     labels = [("23°C or below", None, 23)] + [(f"{t}°C", t, t) for t in range(24, 33)] + [("33°C or higher", 33, None)]
     buckets = tuple(Bucket(st.city_slug, today, "e", "s", f"m{i}", f"0x{i}", lab, lo, hi, "C", f"yes{i}", f"no{i}",
                            True, True, False) for i, (lab, lo, hi) in enumerate(labels))
@@ -78,7 +81,9 @@ async def test_non_us_city_goes_through_jev_and_reaches_simulated_fok(monkeypatc
     # Observed 27°C late in the day: the high can't fall, so 27°C is very likely — at 0.75
     # the market is underpricing it.
     assert live is False and sig.outcome_label == "27°C" and sig.market_price == 0.75
-    assert sig.model_probability > 0.9 and sig.price >= 0.75
+    assert sig.model_probability > 0.8 and sig.price >= 0.75       # blended with the market's ~71%
+    assert "blend" in d.db.rows[-1]["evidence"]["rule"]
+    assert (st.city_slug, today) in d._done                          # one order per city per day
     row = d.db.rows[-1]
     assert row["decision"] == "simulated" and row["order_type"] == "FOK"
     assert row["model_high"] == 24.0 and row["obs_high_so_far"] == 27.0 and row["divergence"] == 3.0
@@ -113,3 +118,47 @@ async def test_huge_gap_with_market_is_refused(monkeypatch):
     await d.evaluate_station(st, metar, "c")
     assert d.executor.placed == []
     assert "implausibly large" in d.db.rows[-1]["skip_reason"]
+
+
+async def test_runs_without_jev_key(monkeypatch):
+    st = to_station(BY_SLUG["tokyo"])
+    today = daemon_mod.local_today(st)
+    d = _daemon(monkeypatch, st, today)
+    d.jev = None                                      # no TYPESAFE_API_KEY
+    metar = MetarObservation(icao_code="RJTT", observed_at=datetime.now(timezone.utc), temp=27,
+                             high_so_far=27.0, unit="C", n_obs_today=10)
+    await d.evaluate_station(st, metar, "c")
+    assert len(d.executor.placed) == 1 and d.executor.placed[0][1] is False
+    assert "off" in d.db.rows[-1]["evidence"]["jev"]
+
+
+async def test_incomplete_market_prices_skip(monkeypatch):
+    st = to_station(BY_SLUG["tokyo"])
+    today = daemon_mod.local_today(st)
+    d = _daemon(monkeypatch, st, today)
+
+    class Sparse(FakeExecutor):
+        async def book_quotes(self, token_ids):
+            q = await super().book_quotes(token_ids)
+            return {t: v for t, v in q.items() if t in ("yes4", "yes5")}
+    d.executor = Sparse()
+    metar = MetarObservation(icao_code="RJTT", observed_at=datetime.now(timezone.utc), temp=27,
+                             high_so_far=27.0, unit="C", n_obs_today=10)
+    await d.evaluate_station(st, metar, "c")
+    assert d.executor.placed == [] and "incomplete" in d.db.rows[-1]["skip_reason"]
+
+
+def test_only_cities_in_their_window_are_due(monkeypatch):
+    from zoneinfo import ZoneInfo
+    tok, lon = to_station(BY_SLUG["tokyo"]), to_station(BY_SLUG["london"])
+    d = _daemon(monkeypatch, tok, daemon_mod.local_today(tok))
+    d.peaks = {"RJTT": 14 * 60, "EGLC": 15 * 60}          # typical peaks 14:00 / 15:00 local
+    now = datetime(2026, 9, 27, 12, 55, tzinfo=ZoneInfo("Asia/Tokyo"))   # Tokyo window 12:45–13:15
+    assert [s.city_slug for s in d.due_stations([tok, lon], now)] == ["tokyo"]
+    d._done.add(("tokyo", now.date()))                    # already traded today → not due again
+    assert d.due_stations([tok, lon], now) == []
+    late = datetime(2026, 9, 27, 13, 20, tzinfo=ZoneInfo("Asia/Tokyo"))
+    d._done.clear()
+    assert d.due_stations([tok, lon], late) == []         # window over
+    d.peaks = {}
+    assert d.due_stations([tok, lon], now) == []          # no peak time known → never traded

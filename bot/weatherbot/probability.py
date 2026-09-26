@@ -73,6 +73,7 @@ def distribution(
     *, observed_high: float | None, means: Iterable[float], hours_remaining: int, unit: str,
     p_peak_passed: float = 0.0, sigma_full: float | None = None,
     weights: Iterable[float] | None = None,
+    sigma_fixed: float | None = None, obs_gap: float | None = None,
 ) -> dict[int, float]:
     """Probability of each whole-degree settlement value.
 
@@ -83,13 +84,16 @@ def distribution(
           track record at this station; equal if uncalibrated); with probability
           p_peak_passed (or when no hours remain) there is no further heating.
     CDF_final(x) = CDF_F(x) · CDF_X(x), and P(k) = CDF(k+0.5) − CDF(k−0.5).
+
+    `sigma_fixed` / `obs_gap` (station unit) replace the generic values when an intraday
+    calibration learned for this city at this time of day is available (calibration.IntradayCal).
     """
     means = list(means)
     w = list(weights) if weights is not None else [1.0] * len(means)
     wsum = sum(w) or 1.0
     w = [x / wsum for x in w]
-    gap = OBS_GAP_SIGMA_C * _unit_scale(unit)
-    s = sigma(hours_remaining, unit, sigma_full)
+    gap = obs_gap if obs_gap is not None else OBS_GAP_SIGMA_C * _unit_scale(unit)
+    s = sigma_fixed if sigma_fixed is not None else sigma(hours_remaining, unit, sigma_full)
     heating = bool(means) and hours_remaining > 0
     p_none = 1.0 if not heating else min(max(p_peak_passed, 0.0), 1.0)
 
@@ -129,41 +133,50 @@ def bucket_probabilities(dist: dict[int, float], buckets: Iterable[Bucket]) -> d
     return probs
 
 
+def forecast_means(forecast, observed_high: float | None, unit: str, cal=None,
+                   shift_steps: float = 0.0) -> tuple[list[float], list[float], int]:
+    """(means, weights, hours_remaining) of the further-heating mixture for one city."""
+    station_bias = cal.bias if cal is not None else {}
+    station_w = (cal.weights or {}) if cal is not None else {}
+    default_w = (sum(station_w.values()) / len(station_w)) if station_w else 1.0
+    models = list(forecast.models.values())
+    means, weights = [], []
+    for m in models:
+        b = station_bias.get(m.model, 0.0)
+        mu = model_mean(
+            remaining_high=None if m.remaining_high is None else m.remaining_high + b,
+            elapsed_high=None if m.elapsed_high is None else m.elapsed_high + b,
+            observed_high=observed_high, hours_elapsed=m.hours_elapsed,
+            unit=unit, shift_steps=shift_steps)
+        if mu is not None:
+            means.append(mu)
+            weights.append(station_w.get(m.model, default_w))
+    return means, weights, max((m.hours_remaining for m in models), default=0)
+
+
 def forecast_distribution(
     forecast, observed_high: float | None, unit: str,
     jev_shift_probs: dict[str, float] | None = None, p_peak_passed: float = 0.0,
-    cal=None,
+    cal=None, intraday=None,
 ) -> dict[int, float]:
     """Full pipeline for one city: models (+ station calibration + bias persistence) × Jev shift
     mixture → settlement value distribution. `forecast` is a weather.forecast.StationForecast;
-    `cal` is an optional calibration.StationCal learned by backtest.py."""
-    station_bias = cal.bias if cal is not None else {}
-    station_w = (cal.weights or {}) if cal is not None else {}
+    `cal` is an optional calibration.StationCal learned by backtest.py; `intraday` an optional
+    calibration.IntradayCal (uncertainty learned for this city ~1 h before its usual peak)."""
     sigma_full = cal.sigma if cal is not None else None
     shift_probs = jev_shift_probs or {"as_forecast": 1.0}
-    models = list(forecast.models.values())
-    hours_remaining = max((m.hours_remaining for m in models), default=0)
     combined: dict[int, float] = {}
     for cat, p_cat in shift_probs.items():
         if p_cat <= 0:
             continue
-        steps = JEV_SHIFT_STEPS.get(cat, 0)
-        means, weights = [], []
-        default_w = (sum(station_w.values()) / len(station_w)) if station_w else 1.0
-        for m in models:
-            b = station_bias.get(m.model, 0.0)
-            mu = model_mean(
-                remaining_high=None if m.remaining_high is None else m.remaining_high + b,
-                elapsed_high=None if m.elapsed_high is None else m.elapsed_high + b,
-                observed_high=observed_high, hours_elapsed=m.hours_elapsed,
-                unit=unit, shift_steps=steps)
-            if mu is not None:
-                means.append(mu)
-                weights.append(station_w.get(m.model, default_w))
+        means, weights, hours_remaining = forecast_means(
+            forecast, observed_high, unit, cal, JEV_SHIFT_STEPS.get(cat, 0))
         for k, p in distribution(observed_high=observed_high, means=means,
                                  hours_remaining=hours_remaining, unit=unit,
                                  p_peak_passed=p_peak_passed, sigma_full=sigma_full,
-                                 weights=weights).items():
+                                 weights=weights,
+                                 sigma_fixed=intraday.sigma if intraday is not None else None,
+                                 obs_gap=intraday.obs_gap if intraday is not None else None).items():
             combined[k] = combined.get(k, 0.0) + p_cat * p
     total = sum(combined.values())
     return {k: v / total for k, v in combined.items()} if total else combined

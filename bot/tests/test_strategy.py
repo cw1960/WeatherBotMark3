@@ -55,3 +55,51 @@ def test_implausibly_large_edge_is_refused():
     probs = {"26°C": 0.95}
     sig, reason, _ = _run(probs, probs, {"26°C": 0.02})
     assert sig is None and "implausibly large" in reason
+
+
+# ------------------------------------------------------------------ blend rule
+from weatherbot.strategy import blend, market_probabilities
+
+
+def _blend_run(probs, mkt, asks, edge=4):
+    cfg = BotConfig(min_edge_pct=edge, max_order_usdc=25, max_budget_usdc=100)
+    return select_trade(station=ST, cfg=cfg, target_date=date(2026, 9, 26), buckets=B, probs=probs,
+                        probs_models_only=probs, asks=asks, divergence=0.0, market_probs=mkt)
+
+
+def test_blend_trades_when_blend_beats_ask():
+    ours = {"24°C or below": 0.02, "25°C": 0.10, "26°C": 0.70, "27°C or higher": 0.18}
+    mkt = {"24°C or below": 0.05, "25°C": 0.25, "26°C": 0.45, "27°C or higher": 0.25}
+    asks = {"24°C or below": 0.06, "25°C": 0.27, "26°C": 0.47, "27°C or higher": 0.27}
+    sig, reason, table = _blend_run(ours, mkt, asks)
+    b = blend(ours, mkt, 0.5)["26°C"]
+    assert reason == "ok" and sig.outcome_label == "26°C"
+    assert abs(sig.model_probability - round(b, 4)) < 1e-4 and 0.45 < b < 0.70
+    assert table[2]["p_bot"] == 0.70 and table[2]["p_market"] == 0.45
+
+
+def test_blend_no_trade_when_market_agrees():
+    same = {"24°C or below": 0.05, "25°C": 0.25, "26°C": 0.45, "27°C or higher": 0.25}
+    asks = {k: v + 0.02 for k, v in same.items()}
+    sig, reason, _ = _blend_run(same, same, asks)
+    assert sig is None
+
+
+def test_blend_skips_asks_outside_price_range():
+    ours = {"24°C or below": 0.0, "25°C": 0.0, "26°C": 0.02, "27°C or higher": 0.98}
+    mkt = {"24°C or below": 0.0, "25°C": 0.0, "26°C": 0.04, "27°C or higher": 0.96}
+    asks = {"24°C or below": 0.001, "25°C": 0.001, "26°C": 0.05, "27°C or higher": 0.97}
+    sig, _, _ = _blend_run(ours, mkt, asks)
+    assert sig is None                                     # 97¢ is above MAX_ASK
+
+
+def test_market_probabilities_from_mids():
+    m = market_probabilities({"a": 0.5, "b": 0.3, "c": 0.4}, 3)
+    assert abs(sum(m.values()) - 1) < 1e-9 and abs(m["a"] - 0.5 / 1.2) < 1e-9
+    assert market_probabilities({"a": 0.5}, 3) is None      # two buckets unpriced
+
+
+def test_quote_mid():
+    from weatherbot.exchange.polymarket import Quote
+    assert Quote(0.40, 10, 0.30).mid == 0.35
+    assert Quote(0.40, 10, None).mid == 0.40 and Quote(None, 0, 0.2).mid == 0.2

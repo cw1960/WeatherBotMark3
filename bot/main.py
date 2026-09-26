@@ -11,13 +11,18 @@ Every cycle (config.poll_interval_seconds):
   3. Every FORECAST_REFRESH_SECONDS: multi-model forecasts (Open-Meteo, ~10 models) and
      airport TAFs for every station.
   4. One METAR request for all stations → latest reading + running local-day high.
-  5. Per station (concurrently, bounded): build the evidence bundle (obs + every model +
-     spread + TAF + AFD where it exists), ask Jev, pick the bucket for the consensus
-     projected high, read its order book.
-  6. Strategy → TradeSignal or skip.
-  7. Re-read config.trading_active *immediately* before execution.
+  5. Only cities inside their DECISION WINDOW are evaluated: ~60 min before that city's
+     typical daily peak (weatherbot/schedule.py, from calibration/peak_times.json). At most
+     one order per city per day.
+  6. Per due city: evidence bundle (obs + every model + spread + TAF + AFD where it exists),
+     Jev if TYPESAFE_API_KEY is set (otherwise models only), bucket probabilities using the
+     uncertainty learned for this city at this time of day (intraday_calibration.json), then
+     the order books (bid + ask for every bucket).
+  7. Strategy (BLEND RULE) → TradeSignal or skip: blend our view with the market's mid prices,
+     trade only if the blend beats the best ask by ≥ config.min_edge_pct.
+  8. Re-read config.trading_active *immediately* before execution.
      True  → FOK order via polymarket-client.   False → SIMULATED, no API call.
-  8. One trade_audit_logs row per station per cycle, including the full evidence bundle.
+  9. One trade_audit_logs row per due city per cycle, including the full evidence bundle.
 """
 from __future__ import annotations
 
@@ -32,7 +37,7 @@ from zoneinfo import ZoneInfo
 import httpx
 import structlog
 
-from weatherbot import strategy
+from weatherbot import schedule, strategy
 from weatherbot.ai.evidence import build_evidence
 from weatherbot.ai.jev import JevClient, build_state
 from weatherbot import calibration
@@ -78,9 +83,15 @@ class Daemon:
         self.forecast = ForecastClient(self.http)
         self.afd = AfdClient(self.http)
         self.taf = TafClient(self.http)
-        self.jev = JevClient()
+        # Jev is optional: without TYPESAFE_API_KEY the bot runs on models + market only.
+        self.jev = JevClient() if settings.jev_api_key else None
         self._jev_cache: dict[str, tuple[tuple, JevEvaluation]] = {}
         self.calibration = calibration.load()   # per-station offsets/sigma from backtest.py
+        # per-city uncertainty ~1 h before the peak, from intraday_backtest.py
+        self.intraday, self.intraday_default = calibration.load_intraday(schedule.DECISION_OFFSET_MIN)
+        self.peaks = schedule.load_peaks()        # typical peak time per airport, from peak_times.py
+        self._done: set[tuple[str, date]] = set()       # (city, local day) already traded/simulated
+        self._announced: set[tuple[str, date]] = set()
         self.executor = PolymarketExecutor()
         self.markets: dict[tuple[str, date], CityDay] = {}
         self._markets_refreshed_at = 0.0
@@ -100,8 +111,13 @@ class Daemon:
             loop.add_signal_handler(sig, self._stop.set)
 
         async with self.executor:
-            log.info("daemon_start", version="0.3.0", order_type=ORDER_TYPE,
-                     calibrated_stations=len(self.calibration))
+            log.info("daemon_start", version="0.4.0", order_type=ORDER_TYPE,
+                     calibrated_stations=len(self.calibration),
+                     intraday_calibrated=len(self.intraday), cities_with_peak_time=len(self.peaks),
+                     jev="on" if self.jev else "off (no TYPESAFE_API_KEY) — models + market only",
+                     decision=f"{schedule.DECISION_OFFSET_MIN} min before each city's typical peak")
+            if not self.peaks:
+                log.error("no_peak_times", hint="run  python peak_times.py  — without it no city is ever due")
             while not self._stop.is_set():
                 started = loop.time()
                 try:
@@ -115,7 +131,8 @@ class Daemon:
                 except asyncio.TimeoutError:
                     pass
             log.info("daemon_stop")
-        await self.jev.aclose()
+        if self.jev is not None:
+            await self.jev.aclose()
         await self.http.aclose()
 
     # ------------------------------------------------------- market refresh
@@ -196,18 +213,38 @@ class Daemon:
             self._metar_refreshed_at = time.monotonic()
         observations = self.observations
         cluster_id = str(uuid.uuid4())
-        log.info("cycle_start", stations=len(stations), with_metar=len(observations),
-                 trading_active=cfg.trading_active)
+        due = self.due_stations(stations, datetime.now(ZoneInfo("UTC")))
+        log.info("cycle_start", stations=len(stations), due=[s.city_slug for s in due],
+                 with_metar=len(observations), trading_active=cfg.trading_active)
 
         async def guarded(st: Station) -> None:
             async with self._sem:
                 await self.evaluate_station(st, observations.get(st.icao_code), cluster_id)
 
-        results = await asyncio.gather(*(guarded(st) for st in stations), return_exceptions=True)
-        for st, res in zip(stations, results):
+        results = await asyncio.gather(*(guarded(st) for st in due), return_exceptions=True)
+        for st, res in zip(due, results):
             if isinstance(res, Exception):
                 log.error("station_failed", city=st.city_slug, error=str(res))
         return cfg.poll_interval_seconds
+
+    def due_stations(self, stations: list[Station], now: datetime) -> list[Station]:
+        """Cities inside their decision window today that haven't traded yet. Logs each city's
+        window once per local day so the log shows the day's plan."""
+        due = []
+        for st in stations:
+            key = (st.city_slug, now.astimezone(ZoneInfo(st.timezone)).date())
+            window = schedule.window_for(st.icao_code, st.timezone, self.peaks, now)
+            if key not in self._announced:
+                self._announced.add(key)
+                if window is None:
+                    log.warning("no_decision_time", city=st.city_slug,
+                                hint="no typical peak in peak_times.json — city is never traded")
+                else:
+                    log.info("decision_window", city=st.city_slug,
+                             local=f"{window[0]:%H:%M}–{window[1]:%H:%M}", tz=st.timezone)
+            if window is not None and window[0] <= now <= window[1] and key not in self._done:
+                due.append(st)
+        return due
 
     async def evaluate_station(
         self, station: Station, metar: MetarObservation | None, cluster_id: str
@@ -267,7 +304,8 @@ class Daemon:
         # Models-only probability for every bucket (code does all the maths).
         buckets = city_day.buckets
         cal = self.calibration.get(station.icao_code)
-        dist0 = forecast_distribution(station_fc, metar.high_so_far, station.unit, cal=cal)
+        ical = calibration.intraday_for(station.icao_code, station.unit, self.intraday, self.intraday_default)
+        dist0 = forecast_distribution(station_fc, metar.high_so_far, station.unit, cal=cal, intraday=ical)
         probs_models_only = bucket_probabilities(dist0, buckets)
 
         # Jev — every city. The NWS discussion only exists for US offices.
@@ -283,39 +321,52 @@ class Daemon:
         if afd:
             audit["afd_issued_at"] = afd[0].isoformat()
 
-        # Re-ask Jev only when its inputs change (new METAR, forecasts, TAF or AFD).
-        fingerprint = (metar.observed_at, station_fc.fetched_at, taf.issued if taf else None,
-                       afd[0] if afd else None, now.astimezone(ZoneInfo(station.timezone)).hour)
-        cached = self._jev_cache.get(station.city_slug)
-        if cached and cached[0] == fingerprint:
-            jev = cached[1]
+        evidence["intraday_uncertainty"] = (
+            {"sigma": ical.sigma, "obs_gap": ical.obs_gap, "learned_days": ical.n_days} if ical else None)
+
+        # Jev (optional). Re-asked only when its inputs change (new METAR, forecasts, TAF or AFD).
+        if self.jev is None:
+            dist = dist0
+            evidence["jev"] = "off — no TYPESAFE_API_KEY; models + market only"
         else:
-            try:
-                jev = await self.jev.evaluate(jev_state)
-            except Exception as exc:
-                return await skip(f"jev unavailable: {exc}")
-            self._jev_cache[station.city_slug] = (fingerprint, jev)
-
-        dist = forecast_distribution(station_fc, metar.high_so_far, station.unit,
-                                     jev_shift_probs=jev.shift_probs, p_peak_passed=jev.p_peak_passed,
-                                     cal=cal)
+            fingerprint = (metar.observed_at, station_fc.fetched_at, taf.issued if taf else None,
+                           afd[0] if afd else None, now.astimezone(ZoneInfo(station.timezone)).hour)
+            cached = self._jev_cache.get(station.city_slug)
+            if cached and cached[0] == fingerprint:
+                jev = cached[1]
+            else:
+                try:
+                    jev = await self.jev.evaluate(jev_state)
+                except Exception as exc:
+                    return await skip(f"jev unavailable: {exc}")
+                self._jev_cache[station.city_slug] = (fingerprint, jev)
+            dist = forecast_distribution(station_fc, metar.high_so_far, station.unit,
+                                         jev_shift_probs=jev.shift_probs, p_peak_passed=jev.p_peak_passed,
+                                         cal=cal, intraday=ical)
+            audit.update(jev_sentiment=jev.raw, jev_confidence=jev.confidence,
+                         jev_direction=jev.direction, afd_excerpt=jev.afd_excerpt)
         probs = bucket_probabilities(dist, buckets)
-        expected_high = round(sum(k * p for k, p in dist.items()), 1)
-        audit.update(
-            jev_sentiment=jev.raw, jev_confidence=jev.confidence, jev_direction=jev.direction,
-            jev_expected_high=expected_high, afd_excerpt=jev.afd_excerpt,
-        )
+        audit["jev_expected_high"] = round(sum(k * p for k, p in dist.items()), 1)
 
-        # Prices for every bucket in one request.
-        quotes = await self.executor.best_asks([b.token_yes for b in buckets])
-        asks = {b.label: quotes[b.token_yes][0] for b in buckets if b.token_yes in quotes}
+        # Bid + ask for every bucket in one request. Mid prices = the market's own view.
+        quotes = await self.executor.book_quotes([b.token_yes for b in buckets])
+        asks = {b.label: quotes[b.token_yes].ask for b in buckets
+                if b.token_yes in quotes and quotes[b.token_yes].ask is not None}
+        market_probs = strategy.market_probabilities(
+            {b.label: quotes[b.token_yes].mid for b in buckets if b.token_yes in quotes}, len(buckets))
+        if market_probs is None:
+            evidence["buckets"] = [{"bucket": b.label, "p": round(probs.get(b.label, 0.0), 4)} for b in buckets]
+            return await skip("market prices incomplete (more than one bucket has no bid or ask)")
 
         cfg = await self.db.get_config()
         sig, reason, table = strategy.select_trade(
             station=station, cfg=cfg, target_date=target_date, buckets=buckets,
             probs=probs, probs_models_only=probs_models_only, asks=asks, divergence=divergence,
+            market_probs=market_probs,
         )
         evidence["buckets"] = table
+        evidence["rule"] = (f"blend {int(strategy.BLEND_WEIGHT * 100)}% bot + market mid; "
+                            f"trade if blend − ask ≥ {cfg.min_edge_pct}%")
         if sig is None:
             return await skip(reason)
 
@@ -348,6 +399,10 @@ class Daemon:
             error_message=result.error_message,
         )
         await self.db.log_audit(audit)
+        # One order per city per day. Retry later in the window only if the FOK simply didn't
+        # fill (KILLED) or was rejected; anything else (filled, simulated, unknown) → done.
+        if result.status not in ("KILLED", "REJECTED"):
+            self._done.add((station.city_slug, target_date))
         log.info("decision", city=station.city_slug, decision=audit["decision"], status=result.status)
 
 
