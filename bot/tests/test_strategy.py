@@ -49,3 +49,9 @@ def test_far_tail_not_bought():
 def test_no_prices():
     sig, reason, _ = _run({"26°C": 0.9}, {"26°C": 0.9}, {})
     assert sig is None and reason == "no prices on any bucket"
+
+
+def test_implausibly_large_edge_is_refused():
+    probs = {"26°C": 0.95}
+    sig, reason, _ = _run(probs, probs, {"26°C": 0.02})
+    assert sig is None and "implausibly large" in reason

@@ -241,10 +241,12 @@ class Daemon:
         station_fc = self.forecasts.get((station.icao_code, target_date))
         if station_fc is None or not station_fc.models:
             return await skip("no model forecasts for today")
-        # divergence: observed high vs the models' own full-day forecasts (median).
+        # divergence: how much warmer (+) / cooler (−) the station has run than the models
+        # over the hours already past today. (Comparing the morning's high with the models'
+        # afternoon peak would be meaningless.) 0 when it's too early to tell.
         raw_consensus = station_fc.raw_consensus()
         headline = station_fc.projected_highs(metar.high_so_far).get(model_name)
-        divergence = round(metar.high_so_far - raw_consensus, 1)
+        divergence = station_fc.bias_so_far(metar.high_so_far) or 0.0
         audit.update(
             model_name=f"consensus of {len(station_fc.models)}",
             model_high=raw_consensus,

@@ -32,12 +32,12 @@ class FakeJev:
 
 
 class FakeExecutor:
-    def __init__(self):
-        self.placed = []
+    def __init__(self, ask_27=0.75):
+        self.placed, self.ask_27 = [], ask_27
 
     async def best_asks(self, token_ids):
-        # market thinks 27°C is unlikely (0.30); everything else priced at 0.05
-        return {t: ((0.30, 100.0) if t == "yes4" else (0.05, 100.0)) for t in token_ids}
+        # 27°C priced at ask_27; everything else at 0.05
+        return {t: ((self.ask_27, 100.0) if t == "yes4" else (0.05, 100.0)) for t in token_ids}
 
     async def place_fok(self, sig, *, live):
         from weatherbot.models import ExecutionResult
@@ -75,10 +75,10 @@ async def test_non_us_city_goes_through_jev_and_reaches_simulated_fok(monkeypatc
     assert d.jev.calls == 1 and "forecaster_discussion" not in d.jev.seen   # Jev ran without an AFD
     assert len(d.executor.placed) == 1
     sig, live = d.executor.placed[0]
-    # Observed 27°C late in the day: the high can't fall, so 27°C is very likely — the market's
-    # 0.30 is a big edge.
-    assert live is False and sig.outcome_label == "27°C" and sig.market_price == 0.30
-    assert sig.model_probability > 0.8 and sig.price >= 0.30
+    # Observed 27°C late in the day: the high can't fall, so 27°C is very likely — at 0.75
+    # the market is underpricing it.
+    assert live is False and sig.outcome_label == "27°C" and sig.market_price == 0.75
+    assert sig.model_probability > 0.9 and sig.price >= 0.75
     row = d.db.rows[-1]
     assert row["decision"] == "simulated" and row["order_type"] == "FOK"
     assert row["model_high"] == 24.0 and row["obs_high_so_far"] == 27.0 and row["divergence"] == 3.0
@@ -101,3 +101,15 @@ async def test_missing_forecast_is_logged_as_skip(monkeypatch):
     assert d.db.rows[-1]["decision"] == "skip"
     assert "no model forecasts" in d.db.rows[-1]["skip_reason"]
     assert d.executor.placed == []
+
+
+async def test_huge_gap_with_market_is_refused(monkeypatch):
+    st = to_station(BY_SLUG["tokyo"])
+    today = daemon_mod.local_today(st)
+    d = _daemon(monkeypatch, st, today)
+    d.executor = FakeExecutor(ask_27=0.20)   # market says 20%, we say ~85% → we're probably wrong
+    metar = MetarObservation(icao_code="RJTT", observed_at=datetime.now(timezone.utc), temp=27,
+                             high_so_far=27.0, unit="C", n_obs_today=10)
+    await d.evaluate_station(st, metar, "c")
+    assert d.executor.placed == []
+    assert "implausibly large" in d.db.rows[-1]["skip_reason"]

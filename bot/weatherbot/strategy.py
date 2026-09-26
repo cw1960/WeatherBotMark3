@@ -22,6 +22,9 @@ from .models import BotConfig, Station, TradeSignal
 
 MIN_PROB = 0.10
 MAX_PRICE = 0.99
+# Real edges in liquid markets are small. A huge gap between us and the market almost always
+# means WE are missing information (a data error, a missed peak, an overconfident model).
+MAX_PLAUSIBLE_EDGE = 0.30
 
 
 def select_trade(
@@ -45,13 +48,16 @@ def select_trade(
                       "ask": ask, "edge": None if edge is None else round(edge, 4)})
         if ask is None or b.closed:
             continue
-        if edge >= min_edge and p0 > ask and p >= MIN_PROB:
+        if edge >= min_edge and p0 > ask and p >= MIN_PROB and edge <= MAX_PLAUSIBLE_EDGE:
             candidates.append((edge, b, p, ask))
 
     if not candidates:
         best = max((r for r in table if r["edge"] is not None), key=lambda r: r["edge"], default=None)
         if best is None:
             return None, "no prices on any bucket", table
+        if best["edge"] > MAX_PLAUSIBLE_EDGE:
+            return None, (f"edge {best['edge']*100:+.0f}% on {best['bucket']} is implausibly large "
+                          f"— assuming our data is wrong, not trading"), table
         return None, (f"best edge {best['edge']*100:+.1f}% on {best['bucket']} "
                       f"(p={best['p']:.2f} vs ask {best['ask']:.2f}) — below {cfg.min_edge_pct}% "
                       f"or not confirmed by models"), table

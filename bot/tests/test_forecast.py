@@ -84,3 +84,13 @@ async def test_rejected_model_is_dropped_and_rest_still_works(monkeypatch):
 def test_us_gets_hrrr_elsewhere_does_not():
     assert "gfs_hrrr" in fcmod.models_for(NYC)
     assert "gfs_hrrr" not in fcmod.models_for(TOKYO)
+
+
+def test_bias_so_far_needs_elapsed_hours():
+    from weatherbot.weather.forecast import ModelDay, StationForecast
+    now = NYC_MIDNIGHT_UTC
+    fc = StationForecast("KLGA", "F", DAY, now, {
+        "a": ModelDay("a", 75, 75, 8, 70.0, 16), "b": ModelDay("b", 76, 76, 8, 71.0, 16)})
+    assert fc.bias_so_far(73.0) == 2.5          # running warmer than both models
+    early = StationForecast("KLGA", "F", DAY, now, {"a": ModelDay("a", 75, 75, 22, 60.0, 2)})
+    assert early.bias_so_far(62.0) is None       # too early to judge

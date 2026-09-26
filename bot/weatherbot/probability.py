@@ -8,9 +8,11 @@ Model of the day's final high, per forecast model m:
            + ALPHA × (observed high so far − model's max over hours already past)   # bias persistence
            + Jev shift                                                              # judgment
     final  = max(observed high so far, X_m)       # the high can only go up
-Models are mixed with equal weight. With probability p_peak_passed (Jev) the high is
-already in, so final = observed high. The market settles on the whole-degree value
-(round half up), so bucket probability = probability mass of the rounded final.
+Models are mixed with equal weight. With probability p_peak_passed (Jev) no further heating
+happens. The high recorded so far is itself slightly uncertain (the true peak may sit a bit
+above the reports we saw), so the floor is observed + a small upward-only error. Nothing is
+ever treated as certain. The market settles on the whole-degree value (round half up), so
+bucket probability = probability mass of the rounded final.
 
 sigma grows with the hours of heating left: little can change at 5 pm, a lot at 8 am.
 All constants below are first guesses to be tuned by backtesting against settled markets.
@@ -39,6 +41,9 @@ def _phi(x: float) -> float:
     return 0.5 * (1.0 + erf(x / sqrt(2.0)))
 
 
+OBS_GAP_SIGMA_C = 0.2   # small allowance that the settled reading differs from what we saw
+
+
 def sigma(hours_remaining: int, unit: str) -> float:
     frac = min(max(hours_remaining, 0), 12) / 12
     return (SIGMA_FLOOR_C + SIGMA_RANGE_C * frac) * _unit_scale(unit)
@@ -64,34 +69,45 @@ def distribution(
     *, observed_high: float | None, means: Iterable[float], hours_remaining: int, unit: str,
     p_peak_passed: float = 0.0,
 ) -> dict[int, float]:
-    """Probability of each whole-degree settlement value."""
+    """Probability of each whole-degree settlement value.
+
+    final = max(F, X), independent:
+      F = observed high + |N(0, OBS_GAP)|   — the true peak so far may sit a little above what
+                                             the reports we saw captured (never below it)
+      X = further heating: equal-weight mixture of N(mean_m, sigma); with probability
+          p_peak_passed (or when no hours remain) there is no further heating.
+    CDF_final(x) = CDF_F(x) · CDF_X(x), and P(k) = CDF(k+0.5) − CDF(k−0.5).
+    """
     means = list(means)
-    out: dict[int, float] = {}
-    obs_r = _rounded(observed_high) if observed_high is not None else None
-
-    def add(k: int, p: float) -> None:
-        if p > 0:
-            out[k] = out.get(k, 0.0) + p
-
-    if obs_r is not None and p_peak_passed > 0:
-        add(obs_r, p_peak_passed)
-    rest = 1.0 - (p_peak_passed if obs_r is not None else 0.0)
-    if not means or hours_remaining <= 0:
-        if obs_r is not None:
-            add(obs_r, rest)
-        return out
-
+    gap = OBS_GAP_SIGMA_C * _unit_scale(unit)
     s = sigma(hours_remaining, unit)
-    w = rest / len(means)
-    for mu in means:
-        lo_k = _rounded(mu - 6 * s)
-        hi_k = _rounded(mu + 6 * s)
-        if obs_r is not None:
-            # everything at or below the observed high settles on the observed high
-            add(obs_r, w * _phi((obs_r + 0.5 - mu) / s))
-            lo_k = max(lo_k, obs_r + 1)
-        for k in range(lo_k, hi_k + 1):
-            add(k, w * (_phi((k + 0.5 - mu) / s) - _phi((k - 0.5 - mu) / s)))
+    heating = bool(means) and hours_remaining > 0
+    p_none = 1.0 if not heating else min(max(p_peak_passed, 0.0), 1.0)
+
+    def cdf_f(x: float) -> float:
+        if observed_high is None:
+            return 1.0
+        if x < observed_high:
+            return 0.0
+        return erf((x - observed_high) / (gap * sqrt(2.0)))
+
+    def cdf_x(x: float) -> float:
+        if not heating:
+            return 1.0
+        mix = sum(_phi((x - mu) / s) for mu in means) / len(means)
+        return p_none + (1.0 - p_none) * mix
+
+    if observed_high is None and not heating:
+        return {}
+    lows = ([observed_high] if observed_high is not None else []) + ([min(means) - 6 * s] if heating else [])
+    highs = ([observed_high + 6 * gap] if observed_high is not None else []) + ([max(means) + 6 * s] if heating else [])
+    k_lo = _rounded(max(lows) if observed_high is not None else min(lows))
+    k_hi = _rounded(max(highs))
+    out: dict[int, float] = {}
+    for k in range(k_lo, k_hi + 1):
+        p = cdf_f(k + 0.5) * cdf_x(k + 0.5) - cdf_f(k - 0.5) * cdf_x(k - 0.5)
+        if p > 1e-9:
+            out[k] = p
     total = sum(out.values())
     return {k: v / total for k, v in out.items()} if total else out
 

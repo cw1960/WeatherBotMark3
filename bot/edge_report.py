@@ -9,8 +9,8 @@ Edge report — what every forecast model says about today's high, city by city.
 Reads public APIs only (Polymarket, aviationweather.gov, Open-Meteo); --jev also calls Jev.
 Never trades.
 Columns: OBS HIGH = highest reading so far today; MODELS SAID = median of the models'
-full-day forecasts; DIFF = how much hotter (+) or colder (−) the station is running than
-modelled so far; FINAL EST = median projected final high; SPREAD = model disagreement;
+full-day forecasts; DIFF = how much hotter (+) or colder (−) the station has run than the
+models over the hours already past today (— = too early to tell); FINAL EST = median projected final high; SPREAD = model disagreement;
 BEST EDGE = our probability minus Polymarket's price on the most mispriced bucket.
 
 Cities where the models point at DIFFERENT buckets are flagged: that disagreement is where
@@ -31,6 +31,7 @@ from polymarket import AsyncPublicClient
 from weatherbot.ai.evidence import build_evidence
 from weatherbot.ai.jev import JevClient, build_state
 from weatherbot.probability import bucket_probabilities, forecast_distribution
+from weatherbot.strategy import MAX_PLAUSIBLE_EDGE
 from weatherbot.catalog import CATALOG, to_station
 from weatherbot.exchange.markets import GammaClient
 from weatherbot.settings import settings
@@ -122,7 +123,7 @@ async def main() -> int:
         cons = fc.consensus(high) if fc else None
         spread = fc.spread(high) if fc else None
         said = fc.raw_consensus() if fc else None
-        diff = round(high - said, 1) if (high is not None and said is not None) else None
+        diff = fc.bias_so_far(high) if fc else None
         tx = (ev.get("taf") or {}).get("explicit_max")
         bucket = cd.bucket_for(cons).label if (cd and cons is not None and cd.bucket_for(cons)) else "—"
         distinct = (ev.get("market") or {}).get("distinct_buckets_across_models", 0)
@@ -136,11 +137,17 @@ async def main() -> int:
                                          jev_shift_probs=v.shift_probs if v else None,
                                          p_peak_passed=v.p_peak_passed if v else 0.0)
             probs = bucket_probabilities(dist, cd.buckets)
-            asks = {b.label: quotes[b.token_yes][0] for b in cd.buckets if b.token_yes in quotes}
+            # Closed markets keep stale leftover orders — never treat those as prices.
+            asks = {b.label: quotes[b.token_yes][0] for b in cd.buckets
+                    if b.token_yes in quotes and not b.closed}
             edges = {lab: probs[lab] - a for lab, a in asks.items()}
+            if not asks:
+                best_edge = "market closed"
             if edges:
                 lab = max(edges, key=edges.get)
                 best_edge = f"{edges[lab]*100:+.0f}% {lab}"
+                if edges[lab] > MAX_PLAUSIBLE_EDGE:
+                    best_edge += "  (implausible — ignored)"
         print(f"{st.city_label[:13]:<14}{now.astimezone(tz).strftime('%H:%M'):>6}  "
               f"{fmt(high, u):>9}{fmt(said, u):>12}{('—' if diff is None else f'{diff:+.1f}'):>7}{fmt(cons, u):>10}"
               f"{fmt(spread):>8}{(len(fc.models) if fc else 0):>7}  "

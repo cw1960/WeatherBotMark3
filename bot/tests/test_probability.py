@@ -24,12 +24,15 @@ def test_distribution_sums_to_one_and_never_below_observed():
 
 
 def test_peak_passed_puts_mass_on_observed():
-    d = distribution(observed_high=25.3, means=[28.0], hours_remaining=6, unit="C", p_peak_passed=0.9)
-    assert d[25] >= 0.9
+    d = distribution(observed_high=25.0, means=[28.0], hours_remaining=6, unit="C", p_peak_passed=0.9)
+    assert d[25] >= 0.88     # ~0.9 minus the small never-certain allowance
 
 
-def test_no_hours_left_means_observed_is_final():
-    assert distribution(observed_high=25.6, means=[29.0], hours_remaining=0, unit="C") == {26: 1.0}
+def test_no_hours_left_is_likely_but_never_certain():
+    d = distribution(observed_high=25.6, means=[29.0], hours_remaining=0, unit="C")
+    assert min(d) == 26 and 0.9 < d[26] < 1.0           # observed bucket near-certain …
+    assert d.get(27, 0) > 0.0                           # … but never exactly certain
+    assert sum(d.values()) == pytest.approx(1.0)
 
 
 def test_sigma_scales_with_time_and_unit():

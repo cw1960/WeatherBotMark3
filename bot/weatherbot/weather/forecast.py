@@ -94,6 +94,15 @@ class StationForecast:
         vals = [m.full_day_high for m in self.models.values()]
         return round(statistics.median(vals), 1) if vals else None
 
+    def bias_so_far(self, observed_high: float | None, min_hours: int = 3) -> float | None:
+        """Median of (observed high so far − model's max over hours already past today).
+        Positive = station running warmer than the models. None early in the day."""
+        if observed_high is None:
+            return None
+        vals = [observed_high - m.elapsed_high for m in self.models.values()
+                if m.elapsed_high is not None and m.hours_elapsed >= min_hours]
+        return round(statistics.median(vals), 1) if vals else None
+
     def spread(self, observed_high: float | None) -> float | None:
         vals = list(self.projected_highs(observed_high).values())
         return round(max(vals) - min(vals), 1) if len(vals) >= 2 else None
@@ -106,6 +115,7 @@ class StationForecast:
             "fetched_at": self.fetched_at.isoformat(),
             "observed_high_so_far": observed_high,
             "consensus_full_day_high": self.raw_consensus(),
+            "running_vs_models_so_far": self.bias_so_far(observed_high),
             "consensus_projected_high": self.consensus(observed_high),
             "spread": self.spread(observed_high),
             "models": {

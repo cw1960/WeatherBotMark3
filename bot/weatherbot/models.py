@@ -52,6 +52,7 @@ class MetarObservation(BaseModel):
     unit: Unit
     n_obs_today: int = 0
     raw: str | None = None
+    six_hour_max: float | None = None   # US synoptic 6-h max group (context only, not settlement)
 
 
 class ModelForecast(BaseModel):

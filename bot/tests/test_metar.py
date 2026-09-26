@@ -41,3 +41,21 @@ def test_celsius_station_stays_celsius():
 
 def test_no_obs_today_returns_none():
     assert MetarClient.summarise(NYC, [], day=date(2026, 9, 26)) is None
+
+
+def test_six_hour_max_is_context_not_settlement():
+    # Hourly reports peaked at 22.2°C; the 18Z synoptic report says the 6-hour max was 23.3°C.
+    # Markets settle on the reported readings, so the high stays 72.0°F; 23.3°C is kept as context.
+    items = [
+        _item(datetime(2026, 9, 26, 17, 0, tzinfo=timezone.utc), 22, "METAR KLGA 261651Z RMK AO2 T02220100"),
+        _item(datetime(2026, 9, 26, 18, 0, tzinfo=timezone.utc), 22, "METAR KLGA 261751Z RMK AO2 SLP144 T02170100 10233 20150 58003"),
+    ]
+    o = MetarClient.summarise(NYC, items, day=date(2026, 9, 26))
+    assert o.high_so_far == 72.0 and o.six_hour_max == 73.9
+
+
+def test_six_hour_max_spanning_midnight_is_ignored():
+    # 06Z report's 6-h window starts 00Z = 20:00 the previous local evening → not today's.
+    items = [_item(datetime(2026, 9, 26, 6, 0, tzinfo=timezone.utc), 18, "METAR KLGA RMK AO2 T01800100 10290")]
+    o = MetarClient.summarise(NYC, items, day=date(2026, 9, 26))
+    assert o.high_so_far == 64.4 and o.six_hour_max is None   # window starts before local midnight

@@ -51,6 +51,7 @@ def build_evidence(
             "high_so_far": metar.high_so_far, "latest": metar.temp,
             "latest_at_utc": metar.observed_at.isoformat(), "reports_today": metar.n_obs_today,
             "latest_raw_metar": metar.raw,
+            "six_hour_max_report": metar.six_hour_max,
         }
     if forecast:
         ev["models"] = forecast.summary(obs_high)
